@@ -10,7 +10,7 @@ import docker.errors
 
 logger = logging.getLogger(__name__)
 
-BASE_IMAGE = "repocraft-base:latest"
+BASE_IMAGE = "repocraft-base:v2"
 
 DOCKERFILE = """\
 FROM ubuntu:24.04
@@ -23,7 +23,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \\
+RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \\
     git \\
     curl \\
     wget \\
@@ -32,8 +32,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     python3-pip \\
     python3-venv \\
     python3-dev \\
-    nodejs \\
-    npm \\
     ca-certificates \\
     && rm -rf /var/lib/apt/lists/*
 
