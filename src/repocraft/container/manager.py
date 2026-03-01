@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import re
 import tarfile
 import io
 from dataclasses import dataclass
@@ -9,13 +11,23 @@ import docker
 import docker.errors
 import docker.models.containers
 
-from .image_builder import BASE_IMAGE, ensure_base_image
+from .image_builder import BASE_IMAGE, ensure_base_image, _rewrite_proxy_for_docker
 
 logger = logging.getLogger(__name__)
 
 MEMORY_LIMIT = "2g"
 CPU_PERIOD = 100_000
 CPU_QUOTA = 100_000  # 1 CPU
+
+
+def _container_env() -> dict[str, str]:
+    """Forward host proxy settings to the container, rewriting localhost -> host.docker.internal."""
+    env: dict[str, str] = {}
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+        val = os.environ.get(key, "")
+        if val:
+            env[key] = _rewrite_proxy_for_docker(val)
+    return env
 
 
 @dataclass
@@ -42,6 +54,9 @@ class ContainerManager:
     def start(self, repo_url: str) -> None:
         ensure_base_image(self._client)
         logger.info("Starting container from image %s", BASE_IMAGE)
+        env = _container_env()
+        if env:
+            logger.debug("Container proxy env: %s", list(env.keys()))
         self._container = self._client.containers.run(
             BASE_IMAGE,
             command="sleep infinity",
@@ -52,6 +67,7 @@ class ContainerManager:
             cpu_quota=CPU_QUOTA,
             network_mode="bridge",
             working_dir="/workspace",
+            environment=env,
         )
         logger.debug("Container started: %s", self._container.short_id)
 
