@@ -129,7 +129,15 @@ async def run_async(args: argparse.Namespace) -> int:
 
     console.print(f"\n[bold]Issue #{issue.number}:[/bold] {issue.title}\n")
 
-    container_mgr = ContainerManager()
+    try:
+        container_mgr = ContainerManager()
+    except Exception as e:
+        console.print(
+            f"[red]Failed to connect to Docker:[/red] {e}\n"
+            "[yellow]Is Docker Desktop running?[/yellow]"
+        )
+        return 1
+
     report = None
 
     try:
