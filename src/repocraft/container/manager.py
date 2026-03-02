@@ -1,28 +1,33 @@
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
 import os
-import re
 import tarfile
-import io
 from dataclasses import dataclass
+from pathlib import Path
+from typing import AsyncIterator
 
 import docker
 import docker.errors
 import docker.models.containers
 
-from .image_builder import BASE_IMAGE, ensure_base_image, _rewrite_proxy_for_docker
+from .image_builder import _collect_proxy_buildargs, _rewrite_proxy_for_docker
 
 logger = logging.getLogger(__name__)
 
-MEMORY_LIMIT = "2g"
-CPU_PERIOD = 100_000
-CPU_QUOTA = 100_000  # 1 CPU
+CONTAINER_NAME = "repocraft-worker"
+IMAGE_NAME = "repocraft-worker:v1"
+MEMORY_LIMIT = os.environ.get("REPOCRAFT_MEM", "8g")
+CPU_QUOTA = int(os.environ.get("REPOCRAFT_CPUS", "4")) * 100_000
 
 
-def _container_env() -> dict[str, str]:
-    """Forward host proxy settings to the container, rewriting localhost -> host.docker.internal."""
-    env: dict[str, str] = {}
+def _container_env(anthropic_api_key: str, github_token: str) -> dict[str, str]:
+    env: dict[str, str] = {
+        "ANTHROPIC_API_KEY": anthropic_api_key,
+        "GITHUB_TOKEN": github_token,
+    }
     for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
         val = os.environ.get(key, "")
         if val:
@@ -48,69 +53,102 @@ class ExecResult:
 
 class ContainerManager:
     def __init__(self) -> None:
-        self._client = docker.from_env()
-        self._container: docker.models.containers.Container | None = None
+        try:
+            self._client = docker.from_env()
+        except docker.errors.DockerException as e:
+            raise RuntimeError(f"Cannot connect to Docker: {e}") from e
 
-    def start(self, repo_url: str) -> None:
-        ensure_base_image(self._client)
-        logger.info("Starting container from image %s", BASE_IMAGE)
-        env = _container_env()
-        if env:
-            logger.debug("Container proxy env: %s", list(env.keys()))
-        self._container = self._client.containers.run(
-            BASE_IMAGE,
+    def _get_container(self) -> docker.models.containers.Container | None:
+        try:
+            return self._client.containers.get(CONTAINER_NAME)
+        except docker.errors.NotFound:
+            return None
+
+    def ensure_running(self, anthropic_api_key: str, github_token: str) -> None:
+        """4-state machine: missing→create, exited→start, restarting→wait, running→noop."""
+        container = self._get_container()
+
+        if container is None:
+            self._build_image_if_needed()
+            self._create_and_start(anthropic_api_key, github_token)
+            self._write_user_claude_md()
+            return
+
+        status = container.status
+        if status == "running":
+            return
+        elif status in ("exited", "stopped", "created"):
+            container.start()
+        elif status == "restarting":
+            container.reload()
+        else:
+            raise RuntimeError(f"Container in unexpected state: {status}")
+
+    def _build_image_if_needed(self) -> None:
+        try:
+            self._client.images.get(IMAGE_NAME)
+            logger.debug("Image %s already exists", IMAGE_NAME)
+            return
+        except docker.errors.ImageNotFound:
+            pass
+
+        logger.info("Building image %s ...", IMAGE_NAME)
+        dockerfile_dir = Path(__file__).parent
+        buildargs = _collect_proxy_buildargs()
+        build_log: list[str] = []
+        try:
+            for chunk in self._client.api.build(
+                path=str(dockerfile_dir),
+                dockerfile="Dockerfile",
+                tag=IMAGE_NAME,
+                rm=True,
+                buildargs=buildargs,
+                decode=True,
+            ):
+                if "stream" in chunk:
+                    line = chunk["stream"].rstrip()
+                    if line:
+                        logger.debug("BUILD: %s", line)
+                        build_log.append(line)
+                elif "error" in chunk:
+                    raise docker.errors.BuildError(chunk["error"], iter(build_log))
+        except docker.errors.BuildError:
+            raise
+        except Exception as e:
+            raise docker.errors.BuildError(str(e), iter(build_log)) from e
+        logger.info("Image %s built successfully", IMAGE_NAME)
+
+    def _create_and_start(self, anthropic_api_key: str, github_token: str) -> None:
+        env = _container_env(anthropic_api_key, github_token)
+        self._client.containers.run(
+            IMAGE_NAME,
+            name=CONTAINER_NAME,
             command="sleep infinity",
             detach=True,
             remove=False,
             mem_limit=MEMORY_LIMIT,
-            cpu_period=CPU_PERIOD,
+            cpu_period=100_000,
             cpu_quota=CPU_QUOTA,
             network_mode="bridge",
-            working_dir="/workspace",
+            volumes={
+                "repocraft-repos": {"bind": "/repos", "mode": "rw"},
+                "repocraft-output": {"bind": "/output", "mode": "rw"},
+            },
             environment=env,
         )
-        logger.debug("Container started: %s", self._container.short_id)
+        logger.info("Container %s started", CONTAINER_NAME)
 
-        result = self.exec_sync(f"git clone --depth=1 {repo_url} /workspace/repo", workdir="/workspace")
-        if result.exit_code != 0:
-            raise RuntimeError(f"git clone failed:\n{result.combined}")
-        logger.info("Repository cloned successfully")
+    def _write_user_claude_md(self) -> None:
+        from ..templates.user_claude_md import get_user_claude_md
+        content = get_user_claude_md()
+        self.exec("mkdir -p /root/.claude")
+        self._put_file("/root/.claude/CLAUDE.md", content)
+        logger.debug("User CLAUDE.md written to container")
 
-    def exec_sync(self, command: str, workdir: str = "/workspace/repo") -> ExecResult:
-        if self._container is None:
-            raise RuntimeError("Container is not running")
-        exit_code, output = self._container.exec_run(
-            cmd=["bash", "-c", command],
-            workdir=workdir,
-            demux=True,
-        )
-        stdout_bytes, stderr_bytes = output if isinstance(output, tuple) else (output, b"")
-        stdout = (stdout_bytes or b"").decode(errors="replace")
-        stderr = (stderr_bytes or b"").decode(errors="replace")
-        logger.debug("exec [%d]: %s", exit_code, command[:80])
-        return ExecResult(exit_code=exit_code, stdout=stdout, stderr=stderr)
-
-    def read_file(self, path: str) -> str:
-        if self._container is None:
-            raise RuntimeError("Container is not running")
-        try:
-            bits, _ = self._container.get_archive(path)
-            buf = io.BytesIO()
-            for chunk in bits:
-                buf.write(chunk)
-            buf.seek(0)
-            with tarfile.open(fileobj=buf) as tf:
-                member = tf.getmembers()[0]
-                f = tf.extractfile(member)
-                if f is None:
-                    return ""
-                return f.read().decode(errors="replace")
-        except docker.errors.NotFound:
-            raise FileNotFoundError(f"File not found in container: {path}")
-
-    def write_file(self, path: str, content: str) -> None:
-        if self._container is None:
-            raise RuntimeError("Container is not running")
+    def _put_file(self, path: str, content: str) -> None:
+        container = self._get_container()
+        if container is None:
+            raise RuntimeError("Container not running")
         filename = path.split("/")[-1]
         directory = "/".join(path.split("/")[:-1]) or "/"
         content_bytes = content.encode()
@@ -120,25 +158,83 @@ class ContainerManager:
             info.size = len(content_bytes)
             tf.addfile(info, io.BytesIO(content_bytes))
         buf.seek(0)
-        self._container.put_archive(directory, buf)
+        container.put_archive(directory, buf)
 
-    def list_files(self, path: str = "/workspace/repo") -> str:
-        result = self.exec_sync(f"find {path} -maxdepth 3 -type f | head -100", workdir="/workspace")
-        return result.stdout
+    def exec(self, command: str, workdir: str = "/repos") -> ExecResult:
+        container = self._get_container()
+        if container is None or container.status != "running":
+            raise RuntimeError("Container not running")
+        exit_code, output = container.exec_run(
+            cmd=["bash", "-lc", command],
+            workdir=workdir,
+            demux=True,
+        )
+        stdout_bytes, stderr_bytes = output if isinstance(output, tuple) else (output, b"")
+        stdout = (stdout_bytes or b"").decode(errors="replace")
+        stderr = (stderr_bytes or b"").decode(errors="replace")
+        logger.debug("exec [%d]: %s", exit_code, command[:80])
+        return ExecResult(exit_code=exit_code, stdout=stdout, stderr=stderr)
 
-    def get_diff(self) -> str:
-        result = self.exec_sync("git diff HEAD")
-        return result.stdout
+    async def exec_stream(self, command: str, workdir: str = "/repos") -> AsyncIterator[str]:
+        """Yield stdout lines in real-time using asyncio.Queue + thread executor."""
+        container = self._get_container()
+        if container is None or container.status != "running":
+            raise RuntimeError("Container not running")
+
+        queue: asyncio.Queue[str | None] = asyncio.Queue()
+        loop = asyncio.get_event_loop()
+
+        def _stream_thread() -> None:
+            exec_id = container.client.api.exec_create(
+                container.id,
+                cmd=["bash", "-lc", command],
+                workdir=workdir,
+            )
+            for chunk in container.client.api.exec_start(exec_id["Id"], stream=True):
+                line = chunk.decode(errors="replace")
+                loop.call_soon_threadsafe(queue.put_nowait, line)
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        loop.run_in_executor(None, _stream_thread)
+
+        while True:
+            line = await queue.get()
+            if line is None:
+                break
+            yield line
+
+    def ensure_repo(self, repo_id: str, repo_url: str) -> None:
+        """Clone repo if not present. repo_id = 'owner-repo' slug."""
+        result = self.exec(f"test -d /repos/{repo_id}/.git")
+        if result.exit_code != 0:
+            result = self.exec(f"git clone --depth=50 {repo_url} /repos/{repo_id}")
+            if result.exit_code != 0:
+                raise RuntimeError(f"git clone failed:\n{result.combined}")
+            logger.info("Cloned %s -> /repos/%s", repo_url, repo_id)
+
+    def reset_repo(self, repo_id: str) -> None:
+        """Hard reset to origin default branch."""
+        workdir = f"/repos/{repo_id}"
+        self.exec("git fetch origin", workdir=workdir)
+        result = self.exec(
+            "git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@'",
+            workdir=workdir,
+        )
+        default_branch = result.stdout.strip() or "main"
+        self.exec(
+            f"git checkout {default_branch} && "
+            f"git reset --hard origin/{default_branch} && "
+            f"git clean -fdx",
+            workdir=workdir,
+        )
+        logger.info("Reset /repos/%s to origin/%s", repo_id, default_branch)
 
     def stop(self) -> None:
-        if self._container is not None:
+        """Stop container (do NOT remove — preserve volumes)."""
+        container = self._get_container()
+        if container is not None:
             try:
-                self._container.stop(timeout=10)
-                self._container.remove()
-                logger.info("Container stopped and removed")
+                container.stop(timeout=10)
+                logger.info("Container %s stopped", CONTAINER_NAME)
             except docker.errors.NotFound:
                 pass
-            except Exception as e:
-                logger.warning("Error stopping container: %s", e)
-            finally:
-                self._container = None
