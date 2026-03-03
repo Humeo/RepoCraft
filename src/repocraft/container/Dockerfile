@@ -34,6 +34,14 @@ RUN printf '#!/bin/bash\necho "protocol=https"\necho "host=github.com"\necho "us
     && git config --global user.name "RepoCraft" \
     && git config --global user.email "repocraft@bot.local"
 
+# Layer 6: Create non-root user for Claude Code
+RUN useradd -m -s /bin/bash repocraft && \
+    mkdir -p /repos /output && \
+    chown -R repocraft:repocraft /repos /output
+
+USER repocraft
+WORKDIR /home/repocraft
+
 # Clear proxy for runtime
 ENV http_proxy="" https_proxy="" all_proxy=""
 

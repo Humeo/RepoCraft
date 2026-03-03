@@ -20,10 +20,10 @@ def get_anthropic_base_url() -> str | None:
 
 
 def get_github_token() -> str:
+    """Get GitHub token from GITHUB_TOKEN env var or gh CLI."""
     token = os.environ.get("GITHUB_TOKEN")
-    if not token:
-        raise RuntimeError("GITHUB_TOKEN environment variable not set")
-    return token
+    if token:
+        return token
 
 
 def parse_issue_url(url: str) -> tuple[str, str, int]:

@@ -149,8 +149,8 @@ class ContainerManager:
     def _write_user_claude_md(self) -> None:
         from ..templates.user_claude_md import get_user_claude_md
         content = get_user_claude_md()
-        self.exec("mkdir -p /root/.claude")
-        self._put_file("/root/.claude/CLAUDE.md", content)
+        self.exec("mkdir -p /home/repocraft/.claude")
+        self._put_file("/home/repocraft/.claude/CLAUDE.md", content)
         logger.debug("User CLAUDE.md written to container")
 
     def _put_file(self, path: str, content: str) -> None:
