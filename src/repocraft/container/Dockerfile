@@ -1,20 +1,16 @@
-FROM ubuntu:24.04
+FROM ubuntu:22.04
 
 ARG HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY=""
 ENV http_proxy=$HTTP_PROXY https_proxy=$HTTPS_PROXY all_proxy=$ALL_PROXY
 ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
-# Layer 1: Base OS packages
+# Layer 1: Base OS packages + Node.js + npm
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl wget build-essential ca-certificates gnupg \
+    git curl wget ca-certificates \
+    nodejs npm \
     && rm -rf /var/lib/apt/lists/*
 
-# Layer 2: Node.js 22 LTS via NodeSource
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Layer 3: GitHub CLI via official apt repo
+# Layer 2: GitHub CLI via official apt repo
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
     && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -23,14 +19,14 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && apt-get update && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Layer 4: Python uv
+# Layer 3: Python uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
-# Layer 5: Claude Code CLI (most volatile — updates frequently)
+# Layer 4: Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
-# Layer 6: git credential helper + global git config
+# Layer 5: git credential helper + global git config
 RUN printf '#!/bin/bash\necho "protocol=https"\necho "host=github.com"\necho "username=x-access-token"\necho "password=${GITHUB_TOKEN}"\n' \
       > /usr/local/bin/git-credential-repocraft \
     && chmod +x /usr/local/bin/git-credential-repocraft \

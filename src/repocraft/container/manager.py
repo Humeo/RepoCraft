@@ -92,7 +92,7 @@ class ContainerManager:
         except docker.errors.ImageNotFound:
             pass
 
-        logger.info("Building image %s ...", IMAGE_NAME)
+        logger.info("Building image %s (this may take 5-10 minutes on first run)...", IMAGE_NAME)
         dockerfile_dir = Path(__file__).parent
         buildargs = _collect_proxy_buildargs()
         build_log: list[str] = []
@@ -108,7 +108,11 @@ class ContainerManager:
                 if "stream" in chunk:
                     line = chunk["stream"].rstrip()
                     if line:
-                        logger.debug("BUILD: %s", line)
+                        # Show important build steps at INFO level
+                        if any(keyword in line for keyword in ["Step ", "Successfully built", "Successfully tagged", "ERROR", "FAILED"]):
+                            logger.info("BUILD: %s", line)
+                        else:
+                            logger.debug("BUILD: %s", line)
                         build_log.append(line)
                 elif "error" in chunk:
                     raise docker.errors.BuildError(chunk["error"], iter(build_log))
