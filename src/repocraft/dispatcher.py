@@ -325,8 +325,11 @@ def _extract_summary(logs: list) -> str:
         line = log["line"]
         try:
             obj = json.loads(line)
-            if obj.get("type") == "result" and "summary" in obj:
-                return obj["summary"][:500]
+            # Claude Code stream-json uses "result" field for final output
+            if obj.get("type") == "result":
+                result_text = obj.get("result", "")
+                if result_text:
+                    return result_text[:500]
         except (json.JSONDecodeError, KeyError):
             continue
 

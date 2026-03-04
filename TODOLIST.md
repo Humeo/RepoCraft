@@ -1,412 +1,159 @@
-# RepoCraft v2 — Autonomous Codebase Maintenance Agent
+# RepoCraft v3 — Self-Proving Autonomous Code Maintainer
 
-## Vision
+## What It Is
 
-一个长时运行的代码库维护助手 — 像一个虚拟团队成员, 被分配到一个仓库后:
+长时运行的自主代码库维护者。它不只是说"我修好了"，而是拿出证据证明——复现截图、测试报告、Before/After 对比。所有人机交互通过 GitHub Issues/PRs 进行。
 
-1. **主动发现问题**: 定期扫描代码库, 发现 bug、安全漏洞、过时依赖、
-   缺失测试、代码异味, 自己创建 issue 或直接修复
-2. **响应事件**: 新 issue、PR review、CI 失败 — 自动接手处理
-3. **接受指令**: 开发者可以直接 @它 或 CLI 告诉它做事 —
-   "加个缓存层"、"查下为什么这个接口慢"、"重构认证模块"
-4. **自主工作数小时**, 迭代测试直到有信心
-5. **返回可审查的产物**: logs、截图、录屏、live preview — 而不只是 diffs
-
-### 三种触发方式
-
-```
-主动发现    Scheduler 定期触发 scan activity → Agent 扫描 repo → 发现问题 → 修复/报告
-事件响应    GitHub event (issue/review/@mention) → 自动创建 activity → Agent 处理
-人类指令    CLI `repocraft ask "加个功能"` 或 GitHub @repocraft → Agent 执行
-```
-
-### Activity Kinds
-
-| Kind | 触发 | Agent 做什么 |
-|------|------|-------------|
-| `init` | 新 repo 首次 | 探索仓库, 生成 repo-specific CLAUDE.md |
-| `fix_issue` | issue / 人类指令 | 理解 → 修复 → 测试 → 提 PR |
-| `task` | 人类指令 (@mention / CLI) | 执行任意任务: 加功能、查问题、重构 |
-| `scan` | 定时 (每天/每周) | 全面扫描: 安全、依赖、测试覆盖、代码质量 → issue/PR |
-| `respond_review` | PR review event | 读 review → 修改 → push |
-| `triage` | 新 issue event | 评估复杂度 → 回复 → 打 label → 可选自动修 |
-
-### Vision Alignment
-
-| 愿景要素 | 方案如何实现 | 交付 |
-|----------|-------------|------|
-| 自主发现问题 | scan activity (定期) + triage (事件) | M4 |
-| 接受人类指令 | `repocraft ask` CLI + GitHub @mention 检测 | M2 |
-| 响应 GitHub 事件 | daemon watch + event polling | M4 |
-| 长时自主工作 | `claude -p --max-turns 200`, 可跑数小时 | M1 |
-| 隔离运行 | 常驻 Docker 容器, OS 级隔离 | M0 |
-| 交任务就走 | `repocraft submit/ask` + daemon 后台 | M2 |
-| Logs | `--output-format stream-json` + `repocraft logs --follow` | M1 |
-| 视频录制 | Playwright 录屏, 附到 PR | M5 |
-| Live Previews | Dev server + cloudflared tunnel | M5 |
-| 不只是 diffs | Agent 直接 `gh pr create`, PR 含测试输出+截图 | M1 |
-
----
+**核心差异化**: Proof of Work（自证机制）。AI 经常自信地给出错误代码，人类要花大量时间验证。RepoCraft 自动采集证据链，人类 30 秒就能判断修复是否可信。
 
 ## Architecture
 
 ```
-Host (你的物理机)
-├── repocraft (单进程 Python CLI)
-│   ├── CLI: fix / submit / daemon / status / logs
-│   ├── Scheduler: poll DB → dispatch workers
-│   ├── Dispatcher: docker exec → claude -p → stream logs to DB
-│   └── SQLite: repos, activities, logs
+RepoCraft Daemon (宿主机, Python 长期进程)
+├── Scheduler
+│     ├── GitHub Poller (60s, ETag 缓存)
+│     │     → 新 issue → triage activity
+│     │     → PR review → respond_review activity
+│     │     → @mention → task activity
+│     ├── Patrol Timer (可配, 如 12h)
+│     │     → patrol activity (限速: N issues / window)
+│     └── Dispatcher
+│           → per-repo asyncio.Lock (同 repo 串行)
+│           → global asyncio.Semaphore (最多 M 个并发)
 │
-└── Docker Container "repocraft-worker" (常驻)
-    ├── ~/.claude/CLAUDE.md        ← 用户级: 所有 repo 通用的 agent 规则
-    ├── claude CLI                 ← 自带 Bash/Edit/Read/Write/Grep/Glob
-    ├── git, gh, python, node, uv
-    ├── /repos/
-    │   ├── owner-repo-a/
-    │   │   ├── CLAUDE.md          ← repo 级: init 阶段由 agent 探索生成
-    │   │   ├── .claude/memory/    ← auto-memory: Claude Code 自动维护
-    │   │   └── src/...
-    │   └── owner-repo-b/
-    │       └── ...
-    └── /output/                   ← 截图、录屏等产物 (volume mount)
+├── Store (SQLite WAL)
+│     repos, activities, logs, processed_events, patrol_budget
+│
+└── Container Manager → Docker "repocraft-worker"
+      ├── Python 3 + claude-agent-sdk    ← SDK 运行在容器内
+      ├── Claude Code CLI (SDK 调用)
+      ├── git, gh, node, uv
+      ├── Playwright + Chromium (证据截图)
+      ├── /repos/owner-repo/  (多 repo)
+      └── 用户的 git identity (name + email)
 ```
 
-### CLAUDE.md 两层设计
+### Claude Agent SDK 执行模型
 
-**用户级 `~/.claude/CLAUDE.md`** (容器内, 对所有 repo 生效):
-所有 repo 都遵循的规则 — workflow, 安全规则, 行为约束。
-由 RepoCraft 在容器初始化时写入, 不由 agent 修改。
+SDK 运行在**容器内**，不在宿主机。流程：
 
-**Repo 级 `/repos/{repo}/CLAUDE.md`** (每个 repo 目录内):
-repo 特有的知识 — 架构, 测试命令, 代码风格, 关键文件。
-由 agent 在 init 阶段探索 repo 后自动生成, 后续 activity 中持续更新。
-
-### 一次 Activity 的执行
-
-```bash
-docker exec repocraft-worker bash -c '
-  cd /repos/{repo_id} &&
-  git fetch origin && git checkout main && git reset --hard origin/main && git clean -fdx &&
-  claude -p "<task prompt>" \
-    --output-format stream-json \
-    --dangerously-skip-permissions \
-    --max-turns 200 \
-    --verbose
-'
+```
+宿主机 Dispatcher
+  → docker exec repocraft-worker python3 /app/run_activity.py
+  → (容器内) run_activity.py 使用 claude-agent-sdk:
+      options = ClaudeAgentOptions(
+          permission_mode="bypassPermissions",
+          disallowed_tools=["AskUserQuestion", "EnterPlanMode"],
+          max_turns=200,
+          cwd=Path("/repos/owner-repo"),
+      )
+      async for msg in query(prompt=prompt, options=options):
+          print(json.dumps(serialize(msg)), flush=True)  # 结构化输出到 stdout
+  → 宿主机读 stdout，写入 SQLite logs
 ```
 
-- Claude Code 自动读 ~/.claude/CLAUDE.md (通用规则) + ./CLAUDE.md (repo 知识)
-- Agent 自主完成: 理解 → 修复 → 测试 → commit → push → gh pr create
-- Dispatcher 只需看 exit code: 0=成功, 非0=失败
-- 不需要解析 PR URL — agent 在容器内直接用 gh 创建 PR
+**为什么用 SDK 而不是 `claude -p`**:
+
+
+|          | `claude -p` (当前)               | Agent SDK                                   |
+| -------- | ------------------------------ | ------------------------------------------- |
+| 工具禁用     | CLI flag `--disallowed-tools`  | `disallowed_tools=["AskUserQuestion"]` 原生参数 |
+| 输出       | stream-json 字符串，手动解析 JSON      | 类型化对象：`ResultMessage`, `AssistantMessage`   |
+| Shell 转义 | base64 编码 hack                 | Python 字符串，无需转义                             |
+| 中断       | kill 进程                        | `client.interrupt()` 优雅中断                   |
+| 安全拦截     | 无法从宿主端拦截                       | `PreToolUse` hook 拦截危险操作                    |
+| 会话续接     | `--resume session_id` CLI flag | SDK API `resume`                            |
+| 错误处理     | 解析 exit code                   | `ResultMessage.is_error` + 异常               |
+| 成本跟踪     | 从 JSON 提取                      | `ResultMessage.total_cost_usd`              |
+
+
+### 证据系统 (Proof of Work)
+
+完全由 prompt 驱动，不需要自定义工具。Claude Code 自带 Bash/Read/Write/Grep 足够：
+
+- **测试输出**: `Bash("pytest -v")` 捕获 stdout
+- **错误日志**: `Bash("python app.py 2>&1")` 捕获 stderr
+- **API 测试**: `Bash("curl -s localhost:8000/api/users | jq .")`
+- **UI 截图**: `Bash("npx playwright screenshot ...")`
+- **数据库状态**: `Bash("sqlite3 db.sqlite 'SELECT count(*) FROM users'")`
+- **压力测试**: `Bash("wrk -t4 -c100 http://localhost:8000/api")`
+
+CLAUDE.md 模板定义证据采集规范和输出格式。
+
+### Git Identity
+
+用户身份，不是 bot 身份。提交显示：
+
+```
+Author: Kolten Luca <kolten@email.com>
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+通过环境变量 `GIT_USER_NAME` + `GIT_USER_EMAIL` 配置。
 
 ---
 
 ## Decisions
 
-| 决策 | 选择 | 理由 |
-|------|------|------|
-| Agent 引擎 | Claude Code CLI (`claude -p`) | 自带所有工具, 不需要自己造 |
-| 隔离 | 单常驻 Docker 容器, repo=目录 | Pattern 2: OS 级隔离 |
-| 权限 | `--dangerously-skip-permissions` | 容器内安全, 官方推荐 |
-| 通用规则 | `~/.claude/CLAUDE.md` (容器内) | 所有 repo 共享, 用户级 |
-| Repo 记忆 | `./CLAUDE.md` + `.claude/memory/` | 原生支持, 零代码, init 阶段生成 |
-| 完成信号 | `claude -p` exit code | 不解析输出, 不提取 PR URL |
-| 日志 | `--output-format stream-json` → SQLite | 实时流 + 持久化 |
-| Session | 默认独立; respond_review 用 `--resume` | 简单, 特殊情况续接 |
-| 并发 | asyncio.Semaphore + per-repo Lock | 全局上限 + repo 串行 |
-| Git auth | GITHUB_TOKEN 环境变量 + credential helper | 容器启动时传入 |
-| Claude Code 更新 | 容器联网, 启动时自动更新 | 始终最新版 |
-| 超时 | `--max-turns 200` + scheduler 2h 硬杀 | 两层防护 |
+
+| 决策       | 选择                                    | 理由                            |
+| -------- | ------------------------------------- | ----------------------------- |
+| Agent 引擎 | Claude Agent SDK (容器内)                | 类型化输出、无 shell hack、hooks、优雅中断 |
+| 隔离       | 单 Docker 容器, 多 repo                   | Pattern 2: OS 级隔离, 简单         |
+| 权限       | `permission_mode="bypassPermissions"` | 容器内安全                         |
+| 人机界面     | GitHub Issues/PRs                     | 唯一界面, 无 CLI chat, 无 Telegram  |
+| 核心价值     | Proof of Work 证据链                     | prompt 驱动, CLAUDE.md 定义标准     |
+| 巡检限速     | max N issues / T hours                | SQLite patrol_budget 表        |
+| Git 身份   | 用户 name + email                       | 环境变量, Co-Authored-By Claude   |
+| 并发       | asyncio.Semaphore + per-repo Lock     | 全局上限 + repo 串行                |
+
 
 ---
 
-## Risks
+## Unknowns & Open Questions
 
-### R1: Agent 无限循环烧钱 [高]
+### U1: SDK 在容器非 root 用户下是否正常工作？ [需验证]
 
-三层防护:
-1. `--max-turns 200` — Claude Code 内置
-2. 用户级 CLAUDE.md: "5 次尝试失败即停止"
-3. Scheduler: `asyncio.wait_for(timeout=7200)` — 2h 硬杀
+当前容器用 `repocraft` 用户 (uid 1001)。`claude-agent-sdk` 内部调用 `claude` CLI，需验证 `permission_mode="bypassPermissions"` 在非 root 下的行为。
+**验证方式**: 在容器内跑 `python3 -c "from claude_agent_sdk import query; ..."`
 
-### R2: Agent push 坏代码 [高]
+### U2: SDK 的 `query()` 输出是否可以 stream 到 stdout？ [需验证]
 
-- 用户级 CLAUDE.md: "push 前必须测试通过"
-- 只走 PR, 不直接 push main
-- 人类仍可 review PR
-- 可选: GitHub branch protection rules
+SDK 的 `async for msg in query()` 返回类型化对象。需要确认能否实时序列化到 stdout，而不是等全部完成。
+**验证方式**: 写一个最小脚本测试 streaming
 
-### R3: GITHUB_TOKEN 泄露 [高]
+### U3: Playwright 截图在容器内非 root 用户下是否能用？ [需验证]
 
-- 容器启动时环境变量传入, 不落盘
-- git credential helper 读取环境变量
-- 用户级 CLAUDE.md: "绝不打印 credentials"
+Chromium 在 Docker 里需要 `--no-sandbox` 等参数。非 root 可能有额外限制。
+**验证方式**: 容器内 `npx playwright screenshot https://example.com test.png`
 
-### R4: 容器磁盘满 [中]
+### U4: GitHub 图片上传到 Issue [需研究]
 
-- Docker volume 大小限制
-- 用户级 CLAUDE.md: "结束时清理 build artifacts"
-- `repocraft cleanup` 命令
+Claude 截图保存为本地文件。如何嵌入到 GitHub issue/PR？
 
-### R5: Git 状态损坏 [中]
+- 方案 A: `gh` CLI 不直接支持图片上传，需要用 GitHub API
+- 方案 B: 把截图 push 到 repo 分支，用相对路径引用
+- 方案 C: 用 GitHub Release assets 或 Gist 做图床
+**需要确定最佳方案**
 
-- 每次 activity 前: `git reset --hard origin/main && git clean -fdx`
-- Per-repo Lock 确保串行
-- 最坏: `rm -rf && git clone` 重来
+### U5: 巡检质量——Claude 能发现真正的 bug 还是只产出噪音？ [需实验]
 
-### R6: Claude Code 进程挂死 [中]
+核心产品风险。如果 patrol 发现的 "bug" 大部分是误报，用户会关闭此功能。
+**缓解**: 严格的 "确认后才提 issue" 规则 + 限速 + 先 reproduce 再报告
 
-- `asyncio.wait_for` + kill
-- 备选: activity-aware timeout (无输出 10 分钟即杀)
+### U6: 多 repo 同容器的磁盘和内存压力 [需监控]
 
----
+10+ repos 克隆到同一容器，加上 Node.js + Python + Playwright，内存可能不够。
+**缓解**: 8GB 默认限制 + `git clone --depth=50` + 定期清理
 
-## TODOLIST
+### U7: `--resume` 在 SDK 中如何传递 session_id？ [需查 SDK 文档]
 
-### Milestone 0: 基础设施
+respond_review 需要续接之前的 fix_issue session。SDK 是否支持 resume？参数怎么传？
 
-- [ ] 0.1 构建容器镜像 (Dockerfile)
-  - 基于 Ubuntu 24.04
-  - 安装: git, curl, wget, build-essential, ca-certificates
-  - 安装: Python 3.12 + uv
-  - 安装: Node.js 22 LTS + npm
-  - 安装: Claude Code CLI (`npm install -g @anthropic-ai/claude-code`)
-  - 安装: GitHub CLI (`gh`)
-  - 配置: git credential helper (读 GITHUB_TOKEN 环境变量)
-  - 配置: git user.name="RepoCraft" user.email="repocraft@bot"
-  - Tag: repocraft-worker:v1
-  - 验证: docker run → claude --version, gh --version, python3 --version
+### U8: 容器内 claude-agent-sdk 的安装方式 [需确认]
 
-- [ ] 0.2 用户级 CLAUDE.md 模板 (templates/user_claude_md.py)
-  - 写入容器的 ~/.claude/CLAUDE.md
-  - 内容: 通用 agent 规则 (workflow, safety rules, branch naming)
-  - 在容器首次创建时写入
-
-- [ ] 0.3 容器管理器 (container/manager.py 重写)
-  - `ensure_running()`:
-    - 检查 `repocraft-worker` 容器状态
-    - 不存在 → 创建 (volumes: repocraft-repos→/repos, repocraft-output→/output)
-    - 传入: ANTHROPIC_API_KEY, GITHUB_TOKEN
-    - 存在但停了 → docker start
-    - 存在且运行 → 返回
-    - 首次创建后写入用户级 CLAUDE.md
-  - `exec(command, workdir) -> ExecResult`
-  - `exec_stream(command, workdir) -> AsyncIterator[str]` (逐行 yield)
-  - `ensure_repo(repo_id, repo_url)`:
-    - /repos/{repo_id}/ 不存在 → git clone --depth=50
-    - 已存在 → 跳过
-  - `reset_repo(repo_id)`:
-    - git fetch origin
-    - 检测默认分支 (main or master)
-    - git checkout {default} && git reset --hard origin/{default} && git clean -fdx
-  - `stop()`: docker stop (不 remove, 保留 volume)
-  - 资源: 8GB RAM, 4 CPU (环境变量 REPOCRAFT_MEM / REPOCRAFT_CPUS)
-
-- [ ] 0.4 SQLite store (store.py)
-  - Tables:
-    ```
-    repos(id, repo_url, created_at)
-    activities(id, repo_id, kind, trigger, status, session_id,
-               summary, created_at, updated_at)
-    logs(id, activity_id, line, ts)
-    ```
-  - status: pending → running → done | failed
-  - kind: init | fix_issue | task | scan | respond_review | triage
-  - CRUD methods
-  - DB 路径: ~/.repocraft/repocraft.db
-
-### Milestone 1: 单 Activity 端到端 (`repocraft fix`)
-
-- [ ] 1.1 Repo Init Activity
-  - 新 repo clone 后, 自动运行 init:
-    ```
-    claude -p "探索这个仓库, 理解其结构、架构、测试方式、构建方式、
-    代码风格, 然后写一个 CLAUDE.md 到项目根目录, 记录你的发现。
-    包括: 架构概述, 测试命令, 构建命令, 关键文件路径, 代码约定。" \
-      --dangerously-skip-permissions \
-      --max-turns 30 \
-      --output-format stream-json
-    ```
-  - Init 完成后, repo 目录下有 agent 生成的 CLAUDE.md
-  - Init 是 activity kind="init", 记录到 DB
-  - 后续所有 activity 都受益于这个 CLAUDE.md
-
-- [ ] 1.2 Dispatcher (dispatcher.py)
-  - `async def dispatch(activity, store, container_mgr)`:
-    1. `container_mgr.ensure_running()`
-    2. `container_mgr.ensure_repo(repo_id, repo_url)`
-    3. 如果是新 repo (无 CLAUDE.md) → 先跑 init activity
-    4. `container_mgr.reset_repo(repo_id)`
-    5. 构造 prompt:
-       - fix_issue: issue title + body + comments + "修复这个 issue 并提 PR"
-       - task: 用户的自由文本指令 (如 "加个缓存层", "查下内存泄漏")
-       - scan: "全面审查这个代码库, 找出 bug/安全问题/过时依赖/缺失测试, 为每个发现创建 issue 或直接修复"
-       - respond_review: PR review comments + "根据 review 修改代码并 push"
-       - triage: issue content + "评估这个 issue, 回复你的分析"
-    6. 构造 claude 命令:
-       ```
-       cd /repos/{repo_id} && claude -p {prompt} \
-         --output-format stream-json \
-         --dangerously-skip-permissions \
-         --max-turns 200 \
-         --verbose
-       ```
-    7. exec_stream → 逐行写 store.add_log()
-    8. 进程退出 → exit_code 决定 status (0=done, else=failed)
-    9. `store.update_activity(status=..., summary=最后几行输出)`
-  - 超时: `asyncio.wait_for(timeout=7200)`
-  - 异常: 捕获 → status="failed"
-
-- [ ] 1.3 CLI: `repocraft fix <issue_url>`
-  - argparse 子命令
-  - 解析 URL → (owner, repo, issue_number)
-  - fetch issue (复用 github/issue_fetcher.py)
-  - store.add_repo() if not exists
-  - store.add_activity(kind="fix_issue", trigger=f"issue:{number}")
-  - await dispatch(activity) — 阻塞, 实时打印日志到终端
-  - 结束时打印 status + summary
-  - 选项: --model, --max-turns, --verbose
-
-- [ ] 1.4 端到端验证
-  - 创建测试 repo: 简单 Python 项目 + 一个 known bug issue
-  - `repocraft fix https://github.com/you/test-repo/issues/1`
-  - 验证:
-    - [ ] init 阶段生成了 repo-specific CLAUDE.md
-    - [ ] Agent 理解了 issue
-    - [ ] Agent 修复了 bug
-    - [ ] Agent 跑了测试
-    - [ ] Agent 创建了 PR (via gh)
-    - [ ] PR description 包含测试输出
-    - [ ] activity status = done
-    - [ ] 日志被写入 DB
-
-### Milestone 2: 后台调度 + 多 Activity
-
-- [ ] 2.1 Scheduler (scheduler.py)
-  ```
-  MAX_WORKERS = env REPOCRAFT_MAX_WORKERS (default 3)
-
-  run_forever():
-    恢复: running → failed (上次 crash)
-    loop:
-      pending = get_pending_activities()
-      for each pending:
-        if repo locked → skip
-        if semaphore full → skip
-        spawn task: acquire sem → acquire repo lock → dispatch → release
-      sleep 10s
-  ```
-
-- [ ] 2.2 CLI: `repocraft daemon`
-  - 前台启动 scheduler
-  - ensure_running() 容器
-  - SIGTERM/SIGINT graceful shutdown
-
-- [ ] 2.3 CLI: `repocraft submit <issue_url>`
-  - 解析 URL, 写 DB (status=pending), 打印 activity_id
-  - 不执行, daemon 后台处理
-  - 选项: --kind (fix_issue/triage/respond_review)
-
-- [ ] 2.4 CLI: `repocraft ask <repo> "<instruction>"`
-  - 直接给 agent 下达任意指令
-  - 例: `repocraft ask owner/repo "加一个 rate limiter 到 API 层"`
-  - 例: `repocraft ask owner/repo "查下为什么 /users 接口响应慢"`
-  - 例: `repocraft ask owner/repo "把认证从 session 迁移到 JWT"`
-  - 创建 activity(kind="task", trigger=instruction)
-  - 默认阻塞执行 (加 --async 则入队交给 daemon)
-
-- [ ] 2.4 CLI: `repocraft status [repo_id | activity_id]`
-  - 无参: 所有 repo + 活跃 activity 列表
-  - repo_id: 该 repo 的 activity 列表
-  - activity_id: 详细信息
-
-- [ ] 2.5 CLI: `repocraft logs <activity_id> [--follow]`
-  - 读 DB logs
-  - --follow: poll 1s, Ctrl-C 退出
-
-- [ ] 2.6 并发验证
-  - 3 个不同 repo issue → 并行处理
-  - 同 repo 2 个 issue → 串行处理
-
-### Milestone 3: Session 续接 + PR Review
-
-- [ ] 3.1 respond_review Activity Kind
-  - 查找原 fix activity 的 session_id
-  - `claude --resume {session_id} -p "review comments: ..."`
-  - resume 失败 → fallback 新 session
-
-- [ ] 3.2 CLI: `repocraft review <pr_url>`
-  - 快捷方式: submit --kind respond_review
-  - 自动 fetch review comments (gh api)
-
-- [ ] 3.3 Session ID 持久化
-  - 从 stream-json 最后一条消息中提取 session_id
-  - 存入 activities.session_id
-
-### Milestone 4: 自动触发 — Watch + 主动扫描 + @Mention
-
-- [ ] 4.1 repos 表增加 watch, last_event_at, scan_interval 字段
-  - `repocraft watch <repo_url>` — 启动监听 + 定期扫描
-  - `repocraft unwatch <repo_url>`
-  - scan_interval 默认 "weekly", 可选 "daily" / "off"
-
-- [ ] 4.2 Scheduler: GitHub event polling
-  - 每 60s poll watched repos
-  - GET /repos/{owner}/{repo}/events (If-None-Match)
-  - 检测: IssuesEvent(opened), PullRequestReviewEvent
-  - 过滤: label "repocraft" 或 "bug" (可配)
-  - 去重: 同 trigger 不重复创建 activity
-
-- [ ] 4.3 Scheduler: @mention 检测
-  - Poll issue/PR comments for "@repocraft" (或配置的 bot name)
-  - 检测到 @mention → 创建 task activity, prompt = comment 内容
-  - 例: 用户在 issue 中评论 "@repocraft 帮我修一下这个"
-  - 例: 用户在 PR 中评论 "@repocraft 加个单元测试"
-
-- [ ] 4.4 Scheduler: 定期主动扫描
-  - 根据 scan_interval, 定期为 watched repos 创建 scan activity
-  - Scan prompt 让 agent 全面审查:
-    - 安全漏洞 (依赖 CVE, 硬编码 secrets, SQL 注入等)
-    - 过时依赖 (major version behind)
-    - 测试覆盖缺口
-    - 代码异味 / 明显 bug
-    - 文档缺失
-  - Agent 为每个发现: 创建 GitHub issue 或直接修复+PR
-  - 避免重复: agent 应先搜索已有 issue 再创建新的
-
-- [ ] 4.5 自动 triage
-  - 新 issue → triage activity
-  - Agent 评估 → 回复评论 + 打 label
-  - 可修复 → 自动创建 fix_issue activity
-
-### Milestone 5: 富媒体输出
-
-- [ ] 5.1 容器内安装 Playwright + Chromium
-  - 更新 Dockerfile (fat 镜像变体)
-
-- [ ] 5.2 用户级 CLAUDE.md 增加浏览器指令
-  - "UI 修复时, 用 playwright 截图, 附到 PR"
-  - "截图保存到 /output/{repo_id}/"
-
-- [ ] 5.3 Live preview
-  - 容器内安装 cloudflared
-  - 容器端口映射
-  - Agent 启动 dev server + tunnel
-  - `repocraft status` 显示 preview URL
-
-- [ ] 5.4 PR 附带产物
-  - Agent 在 PR description 中嵌入截图
-  - 测试输出作为 comment
-
-### Milestone 6: 稳定性
-
-- [ ] 6.1 容器自愈 (dispatch 前 inspect, 不健康 → restart)
-- [ ] 6.2 `repocraft retry <activity_id>`
-- [ ] 6.3 `repocraft cleanup [--older-than 7d]`
-- [ ] 6.4 `repocraft cost [--repo X] [--period 30d]`
-- [ ] 6.5 Notification (macOS notification / webhook)
+容器里已有 `uv`。是否可以 `uv pip install --system claude-agent-sdk`？还是需要 venv？
+需要确认 SDK 依赖是否和容器内现有 Python 环境兼容。
 
 ---
 
@@ -414,51 +161,436 @@ docker exec repocraft-worker bash -c '
 
 ```
 src/repocraft/
-├── cli.py                      # fix, submit, ask, daemon, status, logs, review, watch
-├── config.py                   # 常量 + 环境变量读取
-├── store.py                    # SQLite CRUD
-├── scheduler.py                # 主循环 + worker pool + event poll + scan scheduling
-├── dispatcher.py               # claude -p 执行 + 日志流
+├── __init__.py
+├── cli.py                      # watch, unwatch, daemon, fix, status, logs
+├── config.py                   # env vars, URL parsing, git identity, patrol config
+├── store.py                    # SQLite: repos, activities, logs, events, budget
+├── scheduler.py                # daemon loop: poller + patrol + dispatch
+├── dispatcher.py               # docker exec → SDK runner → log streaming
 ├── container/
-│   ├── manager.py              # Docker 生命周期 + exec
-│   └── Dockerfile              # repocraft-worker 镜像
+│   ├── __init__.py
+│   ├── Dockerfile              # Ubuntu + git + gh + node + python + SDK + playwright
+│   ├── manager.py              # Docker lifecycle, exec, exec_stream
+│   ├── image_builder.py        # proxy helpers (keep)
+│   └── scripts/
+│       └── run_activity.py     # 容器内 SDK runner (接收 prompt, 输出结构化 JSON)
 ├── github/
-│   └── issue_fetcher.py        # 复用现有
+│   ├── __init__.py
+│   ├── issue_fetcher.py        # fetch issue details (keep)
+│   └── poller.py               # event polling with ETag caching
 └── templates/
-    ├── user_claude_md.py       # 用户级 CLAUDE.md (通用规则)
-    └── init_prompt.py          # repo init 的 prompt
+    ├── __init__.py
+    ├── user_claude_md.py        # CLAUDE.md: identity + proof-of-work protocol (核心)
+    ├── init_prompt.py           # repo exploration prompt
+    └── prompts.py               # patrol, fix, review, triage prompts with evidence rules
 ```
 
-~1000 行新代码, 7 个核心文件。
+**13 个 Python 文件**。一个人一下午读完。
+
+### 要删除的文件 (v1 死代码)
+
+```
+src/repocraft/agent/__init__.py
+src/repocraft/agent/orchestrator.py
+src/repocraft/agent/prompts.py
+src/repocraft/tools/__init__.py
+src/repocraft/tools/container_tools.py
+src/repocraft/tools/evidence_tools.py
+src/repocraft/evidence/__init__.py
+src/repocraft/evidence/models.py
+src/repocraft/evidence/collector.py
+src/repocraft/evidence/reporter.py
+```
 
 ---
 
-## Reuse / Delete / Create
+## TODOLIST
 
-| 现有文件 | 处理 |
-|----------|------|
-| github/issue_fetcher.py | 复用 |
-| config.py | 简化重写 |
-| container/manager.py | 重写 |
-| container/image_builder.py | 替换为 Dockerfile |
-| cli.py | 重写 |
-| agent/* | 删除 (Claude Code 替代) |
-| tools/* | 删除 (Claude Code 自带) |
-| evidence/* | 删除 (PR 替代) |
+### Phase 0: Clean Slate + Verify Unknowns
+
+- 0.1 删除 v1 死代码 (10 个文件: agent/*, tools/*, evidence/*)
+- 0.2 验证 U1: SDK 在容器非 root 下工作
+  - 容器内 `pip install claude-agent-sdk`
+  - 跑最小脚本 `query(prompt="echo hello")`
+  - 确认 `bypassPermissions` 正常
+- 0.3 验证 U2: SDK streaming 输出
+  - 容器内跑 SDK，确认 `async for msg in query()` 可实时 flush 到 stdout
+- 0.4 验证 U3: Playwright 截图
+  - 容器内 `npx playwright install --with-deps chromium`
+  - `npx playwright screenshot https://example.com test.png`
+  - 确认非 root 用户下能工作
+- 0.5 研究 U4: GitHub 图片上传最佳方案
+  - 测试 `gh api` 上传图片
+  - 确定最终方案
+- 0.6 验证 U8: SDK 安装方式
+  - `uv pip install --system claude-agent-sdk` 还是 venv？
+  - 确认依赖兼容
+
+### Phase 1: 容器 + SDK Runner + Identity
+
+- 1.1 更新 Dockerfile
+  - 添加 `python3-pip` 或用 `uv` 安装 SDK
+  - 安装 `claude-agent-sdk`
+  - 安装 `playwright` + chromium
+  - `git config --global --add safe.directory '*'`
+  - 保留 git identity 为运行时配置 (不在 build 时写死)
+- 1.2 创建容器内 SDK runner: `container/scripts/run_activity.py`
+  - 接收: prompt (stdin), max_turns (arg), cwd (arg)
+  - 使用 SDK `query()` 执行
+  - 每条 message 序列化为 JSON 写 stdout (flush)
+  - 最终输出 `ResultMessage` 包含: result, is_error, total_cost_usd, num_turns, session_id
+  - 格式:
+    ```jsonl
+    {"type": "assistant", "text": "..."}
+    {"type": "tool_use", "name": "Bash", "input": {"command": "..."}}
+    {"type": "tool_result", "output": "..."}
+    {"type": "result", "result": "...", "is_error": false, "cost_usd": 1.23, "session_id": "abc"}
+    ```
+- 1.3 config.py 更新
+  - 添加 `get_git_user_name()`, `get_git_user_email()`
+  - 添加 `get_patrol_config()` → `PatrolConfig(max_issues=5, window_hours=12)`
+  - 删除 `RepoCraftConfig` dataclass
+- 1.4 container/manager.py 更新
+  - `_configure_git_identity()`: 写用户 name + email 到容器 git config
+  - `ensure_running()` 中调用 `_configure_git_identity()`
+  - `_write_user_claude_md()` 路径确认为 `/home/repocraft/.claude/CLAUDE.md`
+- 1.5 pyproject.toml 更新
+  - 移除 `claude-agent-sdk` 宿主机依赖 (SDK 只在容器内)
+  - 保留: docker, httpx, rich
+
+### Phase 2: Proof of Work 模板 (产品灵魂)
+
+- 2.1 重写 `templates/user_claude_md.py`
+  - **Identity**: 自证式代码维护者, 所有声明必须有证据
+  - **Proof of Work Protocol**:
+    - Layer 1 — 复现: 运行应用/测试, 捕获失败证据 (日志、截图、数据状态)
+    - Layer 2 — 修复验证: 同样步骤, 证明 bug 消失
+    - 证据格式: markdown collapsible sections, before/after 表格
+  - **Patrol Rules**: 限速感知 ("剩余 budget: N issues"), 优先级 (安全>崩溃>逻辑>质量)
+  - **Non-Interactive**: 不调用 AskUserQuestion/EnterPlanMode, 自主决策
+  - **GitHub Output**: issue/PR 用 markdown 格式化证据, 人类可读
+  - **Git Discipline**: 用户身份提交, Co-Authored-By Claude
+- 2.2 创建 `templates/prompts.py`
+  - `patrol_prompt(repo_id, budget_remaining, last_areas)` — 巡检 prompt with 证据要求
+  - `fix_issue_prompt(issue)` — 修复 prompt with before/after 证据模板
+  - `review_pr_prompt(pr_number)` — PR review prompt with 结构化意见格式
+  - `respond_review_prompt(pr_number)` — 回应 review prompt
+  - `triage_prompt(issue)` — 分类 + 回复 prompt
+  - 每个 prompt 都包含证据采集指令
+- 2.3 更新 `templates/init_prompt.py`
+  - 增加 "如何复现 bug" 章节 (dev server 启动方式, 测试命令, demo 数据)
+  - 增加 "如何截图" (playwright 命令, 如果是 web 项目)
+
+### Phase 3: Dispatcher 重写
+
+- 3.1 重写 `dispatcher.py`
+  - 改用 `docker exec python3 /app/run_activity.py` 而非 `docker exec claude -p`
+  - Prompt 通过 stdin pipe 传入 (不再需要 base64)
+  - 读取 stdout 的结构化 JSON lines
+  - 提取 `ResultMessage` 中的: result, is_error, cost_usd, session_id
+  - session_id 存入 activities 表 (用于 respond_review --resume)
+- 3.2 活动感知超时
+  - 每行输出重置计时器
+  - 空闲超时: 10 分钟无输出 → kill
+  - 硬超时: 2 小时 → kill
+  - 两层防护
+- 3.3 巡检预算注入
+  - patrol activity 时, 在 prompt 末尾注入: "Budget remaining: N issues in this window"
+  - 从 patrol_budget 表读取
+- 3.4 会话续接
+  - respond_review 时, 查找原 fix activity 的 session_id
+  - 传给 SDK runner 作为 resume 参数
+  - 失败则 fallback 新 session
+- 3.5 日志批量写入
+  - 攒 50 行或 2 秒后批量 commit 到 SQLite
+  - 减少 I/O 压力
+
+### Phase 4: Store 扩展
+
+- 4.1 repos 表扩展
+  ```sql
+  ALTER TABLE repos ADD COLUMN watch INTEGER DEFAULT 0;
+  ALTER TABLE repos ADD COLUMN last_etag TEXT;
+  ALTER TABLE repos ADD COLUMN last_poll_at TEXT;
+  ALTER TABLE repos ADD COLUMN patrol_interval_hours INTEGER DEFAULT 12;
+  ```
+- 4.2 新增 processed_events 表
+  ```sql
+  CREATE TABLE processed_events (
+      repo_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      event_type TEXT,
+      processed_at TEXT NOT NULL,
+      UNIQUE(repo_id, event_id)
+  );
+  ```
+- 4.3 新增 patrol_budget 表
+  ```sql
+  CREATE TABLE patrol_budget (
+      repo_id TEXT PRIMARY KEY,
+      window_start TEXT NOT NULL,
+      issues_filed INTEGER DEFAULT 0,
+      max_issues INTEGER DEFAULT 5,
+      window_hours INTEGER DEFAULT 12
+  );
+  ```
+- 4.4 批量日志写入方法
+  ```python
+  def add_logs_batch(self, activity_id: str, lines: list[str]) -> None:
+  ```
+- 4.5 schema migration 机制
+  - 简单版: 启动时检测 column 是否存在, 不存在则 ALTER TABLE
+  - 不需要 alembic, 表很少
+
+### Phase 5: GitHub Poller + Scheduler
+
+- 5.1 创建 `github/poller.py`
+  - `EventPoller` class
+  - `poll_events(owner, repo, last_etag, github_token)` → events + new_etag
+  - ETag 缓存: `If-None-Match` header, 304 不消耗 rate limit
+  - 检测事件类型: IssuesEvent(opened), PullRequestReviewEvent, IssueCommentEvent
+  - @mention 检测: 扫描 comment body 中的 `@repocraft`
+  - Rate limit 感知: 读取 `X-RateLimit-Remaining`, 低于阈值降速
+- 5.2 创建 `scheduler.py`
+  - `Scheduler.__init__(store, container_mgr, config)`
+  - `async run()`: 三个并发循环:
+    - `_poll_loop()`: 每 60s 检查 watched repos 的 GitHub 事件
+    - `_patrol_loop()`: 按 patrol_interval 创建 patrol activity (检查 budget)
+    - `_dispatch_loop()`: 每 5s 检查 pending activities, 分配执行
+  - Per-repo `asyncio.Lock` (同 repo 串行)
+  - Global `asyncio.Semaphore(max_concurrent)` (跨 repo 并发上限)
+  - Graceful shutdown (SIGTERM/SIGINT)
+  - 启动恢复: status=running 的 activities 标记为 failed (上次 crash)
+- 5.3 CLI 重写
+  - `repocraft watch <repo_url>` — clone + init + set watch=true
+  - `repocraft unwatch <repo_url>` — set watch=false
+  - `repocraft daemon` — 前台启动 scheduler (长期运行)
+  - `repocraft fix <issue_url>` — 一次性: 创建 activity + dispatch + 等待
+  - `repocraft status [target]` — 显示 repo/activity 状态
+  - `repocraft logs <activity_id> [-f]` — 流式日志
+  - 删除: submit, ask (改为通过 @mention 在 GitHub 上交互)
+
+### Phase 6: End-to-End 验证
+
+- 6.1 创建测试 repo
+  - 简单 Python 项目 + 几个 known bugs
+  - 有 tests, 有 CI
+- 6.2 验证 patrol
+  - `repocraft watch <test_repo>` + `repocraft daemon`
+  - 等待 patrol 运行
+  - 检查: issue 是否包含复现证据? 限速是否生效?
+- 6.3 验证 fix_issue + evidence
+  - 手动在 test_repo 创建 issue
+  - 等待 triage + fix
+  - 检查: PR 是否包含 Before/After 证据表?
+- 6.4 验证 review_pr
+  - 提一个 PR → daemon 检测 → Claude review
+  - 检查: review comment 是否有结构化意见?
+- 6.5 验证 respond_review
+  - 在 Claude 的 PR 上留 review comment
+  - daemon 检测 → Claude respond (用 --resume)
+  - 检查: 是否正确续接上下文?
+- 6.6 验证 @mention
+  - 在 issue 中 @repocraft → daemon 检测 → 执行
+
+---
+
+## Tests
+
+### Unit Tests (`tests/test_unit.py`)
+
+不需要 Docker, 不需要网络, 不需要 API key。纯逻辑测试。
+
+```python
+# --- Config ---
+def test_parse_issue_url():
+    """标准 GitHub issue URL 解析"""
+def test_parse_issue_url_invalid():
+    """非法 URL 抛出 ValueError"""
+def test_repo_id_from_url():
+    """repo URL → slug (owner-repo)"""
+def test_repo_id_from_url_with_git_suffix():
+    """.git 后缀被去掉"""
+def test_get_git_user_name_from_env(monkeypatch):
+    """GIT_USER_NAME 环境变量"""
+def test_get_git_user_name_default():
+    """未设置时的默认值"""
+def test_get_git_user_email_from_env(monkeypatch):
+    """GIT_USER_EMAIL 环境变量"""
+def test_get_anthropic_api_key_from_auth_token(monkeypatch):
+    """ANTHROPIC_AUTH_TOKEN 作为 fallback"""
+def test_get_anthropic_api_key_missing():
+    """两个都没设置 → RuntimeError"""
+
+# --- Store ---
+def test_store_add_repo(tmp_path):
+    """添加 repo 并读取"""
+def test_store_add_repo_idempotent(tmp_path):
+    """重复 add 不报错 (INSERT OR IGNORE)"""
+def test_store_add_activity(tmp_path):
+    """创建 activity 返回 UUID"""
+def test_store_update_activity_status(tmp_path):
+    """更新 status 和 summary"""
+def test_store_get_pending_activities(tmp_path):
+    """只返回 status=pending 的"""
+def test_store_add_log(tmp_path):
+    """写入日志行"""
+def test_store_get_logs_ordered(tmp_path):
+    """日志按 id 排序"""
+def test_store_add_logs_batch(tmp_path):
+    """批量写入日志"""
+def test_store_patrol_budget_fresh(tmp_path):
+    """新 repo 的 budget = max_issues"""
+def test_store_patrol_budget_decrement(tmp_path):
+    """每 file issue 后 budget 减 1"""
+def test_store_patrol_budget_window_reset(tmp_path):
+    """超过 window_hours 后 budget 重置"""
+def test_store_processed_event_dedup(tmp_path):
+    """重复 event_id 被忽略"""
+def test_store_schema_migration(tmp_path):
+    """旧 schema DB 能正常升级"""
+
+# --- Poller ---
+def test_poller_parse_issues_event():
+    """解析 IssuesEvent JSON"""
+def test_poller_parse_pr_review_event():
+    """解析 PullRequestReviewEvent JSON"""
+def test_poller_detect_mention():
+    """@repocraft 在 comment body 中被检测到"""
+def test_poller_detect_mention_negative():
+    """普通 comment 不触发"""
+def test_poller_etag_304_returns_empty():
+    """304 响应返回空事件列表"""
+
+# --- Prompts ---
+def test_patrol_prompt_includes_budget():
+    """patrol prompt 包含 budget 数字"""
+def test_fix_issue_prompt_includes_evidence_template():
+    """fix prompt 包含 Before/After 模板"""
+def test_triage_prompt_includes_issue_content():
+    """triage prompt 包含 issue title + body"""
+
+# --- Dispatcher helpers ---
+def test_extract_summary_from_result_json():
+    """从 {type: result, result: '...'} 提取 summary"""
+def test_extract_summary_fallback():
+    """无 result 行时 fallback 到最后几行"""
+def test_slugify():
+    """标题转 URL-safe slug"""
+def test_slugify_length_limit():
+    """超长标题截断到 50 字符"""
+
+# --- Scheduler ---
+def test_scheduler_creates_triage_for_new_issue():
+    """新 issue 事件 → triage activity"""
+def test_scheduler_skips_processed_event():
+    """已处理的 event_id 不重复创建 activity"""
+def test_scheduler_patrol_respects_budget():
+    """budget 为 0 时不创建 patrol activity"""
+def test_scheduler_patrol_resets_after_window():
+    """window 过期后 budget 重置, 可以 patrol"""
+```
+
+### Integration Tests (`tests/test_integration.py`)
+
+需要 Docker 运行。需要 `ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`。
+用 `@pytest.mark.integration` 标记, 默认跳过, `pytest -m integration` 运行。
+
+```python
+@pytest.fixture(scope="session")
+def container_mgr():
+    """启动 repocraft-worker 容器, 测试结束后停止"""
+
+@pytest.fixture
+def store(tmp_path):
+    """临时 SQLite DB"""
+
+# --- Container ---
+@pytest.mark.integration
+def test_container_starts_and_runs(container_mgr):
+    """容器能启动, exec 返回正确"""
+    result = container_mgr.exec("echo hello")
+    assert result.exit_code == 0
+    assert "hello" in result.stdout
+
+@pytest.mark.integration
+def test_container_claude_installed(container_mgr):
+    """claude CLI 可用"""
+    result = container_mgr.exec("claude --version")
+    assert result.exit_code == 0
+
+@pytest.mark.integration
+def test_container_sdk_installed(container_mgr):
+    """claude-agent-sdk 可 import"""
+    result = container_mgr.exec('python3 -c "import claude_agent_sdk; print(claude_agent_sdk.__version__)"')
+    assert result.exit_code == 0
+
+@pytest.mark.integration
+def test_container_playwright_works(container_mgr):
+    """playwright 截图正常"""
+    result = container_mgr.exec("npx playwright screenshot https://example.com /tmp/test.png")
+    assert result.exit_code == 0
+
+@pytest.mark.integration
+def test_container_git_identity(container_mgr):
+    """git 身份正确配置"""
+    result = container_mgr.exec("git config --global user.name")
+    assert result.stdout.strip() != "RepoCraft"  # 应该是用户身份
+
+# --- SDK Runner ---
+@pytest.mark.integration
+def test_sdk_runner_simple_prompt(container_mgr):
+    """SDK runner 能执行简单 prompt 并返回结构化 JSON"""
+    # docker exec -i ... python3 /app/run_activity.py 5 /tmp <<< "What is 2+2?"
+    # 验证 stdout 最后一行是 {type: result, ...}
+
+@pytest.mark.integration
+def test_sdk_runner_disallowed_tools(container_mgr):
+    """AskUserQuestion 被禁用"""
+    # 验证工具列表中不包含 AskUserQuestion
+
+# --- End-to-End (需要 GITHUB_TOKEN) ---
+@pytest.mark.integration
+@pytest.mark.e2e
+def test_fix_issue_end_to_end(container_mgr, store):
+    """完整 fix 流程: clone → init → fix → PR with evidence"""
+    # 用一个 test repo with known bug
+    # 验证: activity status=done, PR 已创建, PR body 包含证据
+
+@pytest.mark.integration
+@pytest.mark.e2e
+def test_patrol_creates_issue_with_evidence(container_mgr, store):
+    """patrol 发现 bug 并创建带证据的 issue"""
+    # 用一个 test repo with known vulnerability
+    # 验证: issue 已创建, body 包含复现步骤和证据
+```
+
+### Test 配置 (`conftest.py`)
+
+```python
+def pytest_configure(config):
+    config.addinivalue_line("markers", "integration: requires Docker")
+    config.addinivalue_line("markers", "e2e: requires Docker + GitHub token")
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("-m"):
+        skip_integration = pytest.mark.skip(reason="use -m integration to run")
+        for item in items:
+            if "integration" in item.keywords:
+                item.add_marker(skip_integration)
+```
 
 ---
 
 ## Milestones
 
 ```
-M0 基础设施    ████░░░░░░  容器镜像 + 管理器 + SQLite + 用户级 CLAUDE.md
-M1 端到端      ████████░░  init + dispatcher + CLI fix + 验证
-  → `repocraft fix <url>` 跑通: 探索 repo → 修 bug → 提 PR
-M2 后台+指令   ██████░░░░  scheduler + daemon + submit + ask + status + logs
-  → 提交任务/直接下指令, 后台自动处理
-M3 PR review   ████░░░░░░  session resume + review 命令
-M4 自主运维    ████████░░  watch + @mention + 定期 scan + triage
-  → Agent 自己发现问题, 自己修, 自己提 PR
-M5 富媒体      ██████░░░░  Playwright 截图/录屏 + live preview
-M6 稳定性      ████░░░░░░  重试 + 清理 + 成本 + 通知
+P0 清理+验证    ██░░░░░░░░  删 v1 死代码, 验证 SDK/Playwright 在容器内工作
+P1 容器+SDK     ████░░░░░░  Dockerfile 更新, SDK runner, git identity, config
+P2 Proof of Work ████████░░  CLAUDE.md 重写, 所有 prompt 模板 (产品核心)
+P3 Dispatcher   ████░░░░░░  重写用 SDK runner, 活动超时, session resume
+P4 Store 扩展   ██░░░░░░░░  新表, migration, 批量日志
+P5 Scheduler    ██████░░░░  poller, patrol timer, daemon, CLI 重写
+P6 E2E 验证     ████░░░░░░  在真实 repo 上测试全流程
 ```
+
