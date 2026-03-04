@@ -1,13 +1,12 @@
-FROM ubuntu:24.04
+FROM node:22-slim
 
 ARG HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY=""
 ENV http_proxy=$HTTP_PROXY https_proxy=$HTTPS_PROXY all_proxy=$ALL_PROXY
 ENV DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
-# Layer 1: Base OS packages + Node.js + npm + Python3
+# Layer 1: Base OS packages + Python3 (Node.js/npm already included in base image)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl wget ca-certificates \
-    nodejs npm \
+    git curl wget ca-certificates gnupg \
     python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
@@ -30,9 +29,9 @@ RUN npm install -g @anthropic-ai/claude-code
 # Layer 5: Claude Agent SDK (installed system-wide)
 RUN pip3 install --break-system-packages claude-agent-sdk
 
-# Layer 6: Playwright + Chromium for evidence screenshots
+# Layer 6: Playwright Python package + system deps (browsers installed per-user later)
 RUN pip3 install --break-system-packages playwright \
-    && playwright install --with-deps chromium
+    && playwright install-deps chromium
 
 # Layer 7: git credential helper + global git config
 # Note: user.name and user.email are set at runtime via _configure_git_identity()
@@ -56,6 +55,9 @@ WORKDIR /home/repocraft
 
 # Ensure uv is available for non-root user
 ENV PATH="/root/.local/bin:/home/repocraft/.local/bin:$PATH"
+
+# Install Playwright Chromium as repocraft user (browsers stored in ~/.cache/ms-playwright)
+RUN playwright install chromium
 
 # Clear proxy for runtime
 ENV http_proxy="" https_proxy="" all_proxy=""

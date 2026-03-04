@@ -71,7 +71,6 @@ def _process_result_message(msg: ResultMessage) -> None:
         "session_id": msg.session_id,
         "num_turns": msg.num_turns,
         "duration_ms": msg.duration_ms,
-        "stop_reason": msg.stop_reason,
     })
 
 
@@ -105,7 +104,6 @@ async def run(prompt: str, max_turns: int, cwd: str, session_id: str | None = No
             "session_id": None,
             "num_turns": 0,
             "duration_ms": 0,
-            "stop_reason": "error",
         })
         return 1
 
