@@ -4,6 +4,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 
 def get_anthropic_api_key() -> str:
@@ -24,6 +25,29 @@ def get_github_token() -> str:
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         return token
+
+
+def get_git_user_name() -> str:
+    """Get git user name from GIT_USER_NAME env var."""
+    return os.environ.get("GIT_USER_NAME", "RepoCraft")
+
+
+def get_git_user_email() -> str:
+    """Get git user email from GIT_USER_EMAIL env var."""
+    return os.environ.get("GIT_USER_EMAIL", "repocraft@bot.local")
+
+
+class PatrolConfig(NamedTuple):
+    max_issues: int
+    window_hours: int
+
+
+def get_patrol_config() -> PatrolConfig:
+    """Get patrol rate-limiting config from env vars."""
+    return PatrolConfig(
+        max_issues=int(os.environ.get("REPOCRAFT_PATROL_MAX_ISSUES", "5")),
+        window_hours=int(os.environ.get("REPOCRAFT_PATROL_WINDOW_HOURS", "12")),
+    )
 
 
 def parse_issue_url(url: str) -> tuple[str, str, int]:

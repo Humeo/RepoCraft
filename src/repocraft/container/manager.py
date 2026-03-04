@@ -14,6 +14,7 @@ import docker.errors
 import docker.models.containers
 
 from .image_builder import _collect_proxy_buildargs, _rewrite_proxy_for_docker
+from ..config import get_git_user_name, get_git_user_email
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ class ContainerManager:
             self._build_image_if_needed()
             self._create_and_start(anthropic_api_key, github_token, anthropic_base_url)
             self._write_user_claude_md()
+            self._configure_git_identity()
             return
 
         status = container.status
@@ -152,6 +154,14 @@ class ContainerManager:
         self.exec("mkdir -p /home/repocraft/.claude")
         self._put_file("/home/repocraft/.claude/CLAUDE.md", content)
         logger.debug("User CLAUDE.md written to container")
+
+    def _configure_git_identity(self) -> None:
+        """Set git user.name and user.email inside the container."""
+        name = get_git_user_name()
+        email = get_git_user_email()
+        self.exec(f'git config --global user.name "{name}"')
+        self.exec(f'git config --global user.email "{email}"')
+        logger.debug("Git identity: %s <%s>", name, email)
 
     def _put_file(self, path: str, content: str) -> None:
         container = self._get_container()
@@ -250,3 +260,28 @@ class ContainerManager:
                 logger.info("Container %s stopped", CONTAINER_NAME)
             except docker.errors.NotFound:
                 pass
+
+    async def exec_sdk_runner(
+        self,
+        prompt: str,
+        cwd: str,
+        max_turns: int = 200,
+        session_id: str | None = None,
+    ) -> AsyncIterator[tuple[str | None, int | None]]:
+        """Run SDK runner script inside container, streaming JSONL output.
+
+        Writes prompt to a temp file, invokes run_activity.py with file path arg.
+        Yields (line, None) tuples for each output line, then (None, exit_code).
+        """
+        import uuid as _uuid
+        prompt_id = _uuid.uuid4().hex[:8]
+        prompt_path = f"/tmp/prompt-{prompt_id}.txt"
+
+        # Write prompt to temp file inside container
+        self._put_file(prompt_path, prompt)
+
+        session_arg = session_id if session_id else "-"
+        cmd = f"python3 /app/run_activity.py {max_turns} {cwd} {session_arg} {prompt_path} && rm -f {prompt_path}"
+
+        async for item in self.exec_stream(cmd, workdir=cwd):
+            yield item
