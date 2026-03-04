@@ -314,8 +314,8 @@ async def _execute_sdk_runner(
                 if verbose:
                     logger.debug("[%s] %s", activity_id[:8], line.rstrip())
             else:
-                # Sentinel: exit code
-                exit_code = code or 1
+                # Sentinel: exit code (code=0 is success, None means unknown → fail)
+                exit_code = code if code is not None else 1
 
         await _flush_batch()
         logger.info(
