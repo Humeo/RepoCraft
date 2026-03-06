@@ -11,10 +11,10 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from .auth import get_auth
 from .config import (
     get_anthropic_api_key,
     get_anthropic_base_url,
-    get_github_token,
     get_patrol_config,
     parse_issue_url,
     repo_id_from_url,
@@ -82,7 +82,8 @@ async def cmd_watch(args: argparse.Namespace) -> int:
     try:
         anthropic_api_key = get_anthropic_api_key()
         anthropic_base_url = get_anthropic_base_url()
-        github_token = get_github_token()
+        auth = get_auth()
+        github_token = await auth.get_token()
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
         return 1
@@ -147,6 +148,7 @@ async def cmd_daemon(args: argparse.Namespace) -> int:
 
     try:
         get_anthropic_api_key()
+        auth = get_auth()
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
         return 1
@@ -158,6 +160,7 @@ async def cmd_daemon(args: argparse.Namespace) -> int:
         Panel(
             "[bold green]CatoCode Daemon[/bold green]\n"
             f"Max concurrent: {args.max_concurrent}\n"
+            f"Auth: {auth.auth_type()}\n"
             "Press Ctrl+C to stop",
             border_style="green",
         )
@@ -168,6 +171,7 @@ async def cmd_daemon(args: argparse.Namespace) -> int:
         container_mgr=container_mgr,
         max_concurrent=args.max_concurrent,
         verbose=args.verbose,
+        auth=auth,
     )
 
     try:
@@ -204,7 +208,8 @@ async def cmd_fix(args: argparse.Namespace) -> int:
     try:
         anthropic_api_key = get_anthropic_api_key()
         anthropic_base_url = get_anthropic_base_url()
-        github_token = get_github_token()
+        auth = get_auth()
+        github_token = await auth.get_token()
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
         return 1

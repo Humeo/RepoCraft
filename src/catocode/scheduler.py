@@ -17,7 +17,8 @@ import logging
 import signal
 from datetime import datetime, timezone
 
-from .config import get_anthropic_api_key, get_anthropic_base_url, get_github_token, get_patrol_config, parse_repo_url
+from .auth import Auth, get_auth
+from .config import get_anthropic_api_key, get_anthropic_base_url, get_patrol_config, parse_repo_url
 from .container.manager import ContainerManager
 from .decision import check_user_is_admin
 from .dispatcher import dispatch
@@ -37,11 +38,13 @@ class Scheduler:
         container_mgr: ContainerManager,
         max_concurrent: int = MAX_CONCURRENT,
         verbose: bool = False,
+        auth: Auth | None = None,
     ) -> None:
         self._store = store
         self._container_mgr = container_mgr
         self._max_concurrent = max_concurrent
         self._verbose = verbose
+        self._auth = auth or get_auth()
 
         # Per-repo serial lock
         self._repo_locks: dict[str, asyncio.Lock] = {}
@@ -142,7 +145,7 @@ class Scheduler:
         number = parts[1]
 
         # Fetch recent comments
-        github_token = get_github_token()
+        github_token = await self._auth.get_token()
         if not github_token:
             logger.error("GitHub token not configured")
             return
@@ -283,7 +286,7 @@ class Scheduler:
                         store=self._store,
                         container_mgr=self._container_mgr,
                         anthropic_api_key=get_anthropic_api_key(),
-                        github_token=get_github_token() or "",
+                        github_token=await self._auth.get_token(),
                         anthropic_base_url=get_anthropic_base_url(),
                         verbose=self._verbose,
                     )
