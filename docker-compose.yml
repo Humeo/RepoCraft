@@ -1,0 +1,36 @@
+services:
+  catocode:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${WEBHOOK_PORT:-8080}:8080"
+    volumes:
+      # Mount Docker socket so CatoCode can manage the worker container
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persist database and repo data
+      - catocode-data:/data
+    environment:
+      # ── Required ──────────────────────────────────────────
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+      # ── Auth: choose ONE of the two options below ─────────
+
+      # Option A: Personal Access Token (simpler)
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+
+      # Option B: GitHub App (recommended for production)
+      - GITHUB_APP_ID=${GITHUB_APP_ID:-}
+      - GITHUB_APP_PRIVATE_KEY=${GITHUB_APP_PRIVATE_KEY:-}
+      - GITHUB_APP_INSTALLATION_ID=${GITHUB_APP_INSTALLATION_ID:-}
+      - GITHUB_APP_WEBHOOK_SECRET=${GITHUB_APP_WEBHOOK_SECRET:-}
+
+      # ── Optional tuning ───────────────────────────────────
+      - CATOCODE_PATROL_MAX_ISSUES=${CATOCODE_PATROL_MAX_ISSUES:-5}
+      - CATOCODE_PATROL_WINDOW_HOURS=${CATOCODE_PATROL_WINDOW_HOURS:-12}
+      - GIT_USER_NAME=${GIT_USER_NAME:-CatoCode}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-catocode@bot.local}
+
+    command: daemon --webhook-port 8080 --max-concurrent ${MAX_CONCURRENT:-3}
+
+volumes:
+  catocode-data:

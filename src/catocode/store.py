@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 import uuid
@@ -98,7 +99,8 @@ def _now() -> str:
 class Store:
     def __init__(self, db_path: Path | None = None) -> None:
         if db_path is None:
-            db_path = Path.home() / ".catocode" / "catocode.db"
+            env_path = os.environ.get("CATOCODE_DB_PATH")
+            db_path = Path(env_path) if env_path else Path.home() / ".catocode" / "catocode.db"
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._path = db_path
         self._lock = threading.Lock()

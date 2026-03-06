@@ -46,6 +46,13 @@ def build_parser() -> argparse.ArgumentParser:
     # --- daemon ---
     daemon_p = subparsers.add_parser("daemon", help="Run background scheduler (blocking)")
     daemon_p.add_argument("--max-concurrent", type=int, default=3, help="Max concurrent activities")
+    daemon_p.add_argument(
+        "--webhook-port",
+        type=int,
+        default=0,
+        metavar="PORT",
+        help="Start webhook server on PORT (0 = disabled, default: 0)",
+    )
 
     # --- fix ---
     fix_p = subparsers.add_parser("fix", help="Fix a GitHub issue (blocking)")
@@ -145,6 +152,7 @@ async def cmd_unwatch(args: argparse.Namespace) -> int:
 
 async def cmd_daemon(args: argparse.Namespace) -> int:
     from .scheduler import Scheduler
+    from .webhook.server import WebhookServer
 
     try:
         get_anthropic_api_key()
@@ -156,15 +164,17 @@ async def cmd_daemon(args: argparse.Namespace) -> int:
     store = Store()
     container_mgr = ContainerManager()
 
-    console.print(
-        Panel(
-            "[bold green]CatoCode Daemon[/bold green]\n"
-            f"Max concurrent: {args.max_concurrent}\n"
-            f"Auth: {auth.auth_type()}\n"
-            "Press Ctrl+C to stop",
-            border_style="green",
-        )
-    )
+    webhook_port: int = args.webhook_port
+    info_lines = [
+        "[bold green]CatoCode Daemon[/bold green]",
+        f"Max concurrent: {args.max_concurrent}",
+        f"Auth: {auth.auth_type()}",
+    ]
+    if webhook_port:
+        info_lines.append(f"Webhook server: http://0.0.0.0:{webhook_port}")
+    info_lines.append("Press Ctrl+C to stop")
+
+    console.print(Panel("\n".join(info_lines), border_style="green"))
 
     scheduler = Scheduler(
         store=store,
@@ -174,10 +184,27 @@ async def cmd_daemon(args: argparse.Namespace) -> int:
         auth=auth,
     )
 
+    tasks = [asyncio.create_task(scheduler.run())]
+
+    if webhook_port:
+        import uvicorn
+
+        webhook_server = WebhookServer(store, auth=auth)
+        config = uvicorn.Config(
+            webhook_server.app,
+            host="0.0.0.0",
+            port=webhook_port,
+            log_level="warning",
+        )
+        uv_server = uvicorn.Server(config)
+        tasks.append(asyncio.create_task(uv_server.serve()))
+
     try:
-        await scheduler.run()
-    except KeyboardInterrupt:
-        pass
+        await asyncio.gather(*tasks)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        scheduler.stop()
+        for t in tasks:
+            t.cancel()
 
     console.print("[yellow]Daemon stopped[/yellow]")
     return 0
