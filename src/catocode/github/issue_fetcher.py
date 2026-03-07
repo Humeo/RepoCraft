@@ -15,6 +15,7 @@ class GitHubIssue:
     labels: list[str]
     comments: list[str]
     url: str
+    created_at: str = ""
 
 
 async def fetch_issue(
@@ -51,4 +52,5 @@ async def fetch_issue(
         labels=[lb["name"] for lb in data.get("labels", [])],
         comments=comments,
         url=data["html_url"],
+        created_at=data.get("created_at", ""),
     )

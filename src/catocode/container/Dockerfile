@@ -29,9 +29,8 @@ RUN npm install -g @anthropic-ai/claude-code
 # Layer 5: Claude Agent SDK (installed system-wide)
 RUN pip3 install --break-system-packages claude-agent-sdk
 
-# Layer 6: Playwright Python package + system deps (browsers installed per-user later)
-RUN pip3 install --break-system-packages playwright \
-    && playwright install-deps chromium
+# Layer 6: Playwright Python package (browser installed on demand, not at build time)
+RUN pip3 install --break-system-packages playwright
 
 # Layer 7: git credential helper + global git config
 # Note: user.name and user.email are set at runtime via _configure_git_identity()
@@ -59,9 +58,6 @@ WORKDIR /home/catocode
 
 # Ensure uv is available for non-root user
 ENV PATH="/root/.local/bin:/home/catocode/.local/bin:$PATH"
-
-# Install Playwright Chromium as catocode user (browsers stored in ~/.cache/ms-playwright)
-RUN playwright install chromium
 
 # Clear proxy for runtime
 ENV http_proxy="" https_proxy="" all_proxy=""
