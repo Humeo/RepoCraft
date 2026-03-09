@@ -29,7 +29,7 @@ COPY src/ src/
 RUN mkdir -p /data
 ENV CATOCODE_DB_PATH=/data/catocode.db
 
-EXPOSE 8080
+EXPOSE 8000
 
 ENTRYPOINT ["uv", "run", "catocode"]
-CMD ["daemon", "--webhook-port", "8080"]
+CMD ["server", "--port", "8000"]
