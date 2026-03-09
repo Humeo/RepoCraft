@@ -1,5 +1,4 @@
 import { getStats, getRepos, getActivities } from "@/lib/api";
-import { RepoList } from "@/components/RepoList";
 import { LiveDashboard } from "@/components/LiveDashboard";
 import Link from "next/link";
 
@@ -38,7 +37,7 @@ export default async function DashboardPage() {
         </div>
       )}
 
-      {/* Live-updating stats + repos + activities */}
+      {/* Live-updating stats + activities */}
       <LiveDashboard
         initialStats={stats}
         initialActivities={stats?.recent_activities ?? activities ?? []}
