@@ -194,12 +194,20 @@ def make_router(store: Store) -> APIRouter:
         if repo.get("user_id") != current_user["id"]:
             raise HTTPException(status_code=403, detail="Access denied")
 
+        # Ensure budget row exists for this repo
+        max_issues = repo.get("patrol_max_issues") or 5
+        window_hours = repo.get("patrol_window_hours") or 12
+        store.init_patrol_budget(repo_id, max_issues=max_issues, window_hours=window_hours)
+
         budget = store.get_patrol_budget(repo_id)
         if budget <= 0:
-            raise HTTPException(status_code=429, detail="Patrol budget exhausted for this window")
+            raise HTTPException(
+                status_code=429,
+                detail=f"Patrol budget exhausted ({max_issues} issues/{window_hours}h window). Wait for the window to reset.",
+            )
 
         activity_id = store.add_activity(repo_id, "patrol", f"budget:{budget}")
-        logger.info("Manual patrol trigger by %s for %s", current_user["id"][:8], repo_id)
+        logger.info("Manual patrol trigger by %s for %s (budget=%d)", current_user["id"][:8], repo_id, budget)
         return {"status": "triggered", "activity_id": activity_id}
 
     @r.get("/repos/{repo_id}/patrol/status")

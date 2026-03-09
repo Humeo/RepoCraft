@@ -131,16 +131,25 @@ export async function updatePatrolSettings(
   }
 }
 
-export async function triggerPatrol(repoId: string): Promise<{ activity_id: string } | null> {
+export async function triggerPatrol(
+  repoId: string
+): Promise<{ activity_id: string } | { error: string } | null> {
   try {
     const res = await fetch(`${API_URL}/api/repos/${repoId}/patrol/trigger`, {
       method: "POST",
       credentials: "include",
     });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      try {
+        const body = await res.json();
+        return { error: body.detail ?? `HTTP ${res.status}` };
+      } catch {
+        return { error: `HTTP ${res.status}` };
+      }
+    }
     return res.json();
   } catch {
-    return null;
+    return { error: "Network error" };
   }
 }
 

@@ -17,7 +17,7 @@ function PatrolPanel({ repo }: { repo: Repo }) {
   const [saving, setSaving] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [triggerMsg, setTriggerMsg] = useState<string | null>(null);
+  const [triggerMsg, setTriggerMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -37,7 +37,13 @@ function PatrolPanel({ repo }: { repo: Repo }) {
     setTriggerMsg(null);
     const result = await triggerPatrol(repo.id);
     setTriggering(false);
-    setTriggerMsg(result ? `Triggered (activity ${result.activity_id.slice(0, 8)})` : "Failed — check budget");
+    if (!result) {
+      setTriggerMsg({ text: "Network error", ok: false });
+    } else if ("error" in result) {
+      setTriggerMsg({ text: `Failed: ${result.error}`, ok: false });
+    } else {
+      setTriggerMsg({ text: `Triggered (activity ${result.activity_id.slice(0, 8)})`, ok: true });
+    }
   }, [repo.id]);
 
   return (
@@ -100,19 +106,17 @@ function PatrolPanel({ repo }: { repo: Repo }) {
         >
           {saving ? "Saving…" : "Save"}
         </button>
-        {enabled && (
-          <button
-            onClick={handleTrigger}
-            disabled={triggering}
-            className="px-2.5 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 transition-colors disabled:opacity-50"
-          >
-            {triggering ? "Triggering…" : "Manual Trigger"}
-          </button>
-        )}
+        <button
+          onClick={handleTrigger}
+          disabled={triggering}
+          className="px-2.5 py-1 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 transition-colors disabled:opacity-50"
+        >
+          {triggering ? "Triggering…" : "Manual Trigger"}
+        </button>
         {saved && <span className="text-emerald-400">Saved ✓</span>}
         {triggerMsg && (
-          <span className={triggerMsg.startsWith("Failed") ? "text-red-400" : "text-emerald-400"}>
-            {triggerMsg}
+          <span className={triggerMsg.ok ? "text-emerald-400" : "text-red-400"}>
+            {triggerMsg.text}
           </span>
         )}
       </div>
