@@ -16,8 +16,8 @@ EMBEDDING_API_KEY = os.environ.get("EMBEDDING_API_KEY", "")
 EMBEDDING_BASE_URL = os.environ.get("EMBEDDING_BASE_URL", "https://yunwu.ai/v1")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-large")
 
-# Haiku model for cheap summarization
-SUMMARY_MODEL = "claude-haiku-4-5-20251001"
+# Haiku model for cheap summarization (override via SUMMARY_MODEL env var)
+SUMMARY_MODEL = os.environ.get("SUMMARY_MODEL", "claude-haiku-4-5-20251001")
 
 
 def _get_openai_client():
@@ -58,6 +58,11 @@ async def normalize_issue_summary(title: str, body: str, comments: list[str]) ->
     if not api_key:
         return title
 
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    client_kwargs = {"api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
     comments_text = "\n".join(f"- {c[:200]}" for c in comments[:5])
     prompt = f"""Analyze this GitHub issue and produce a concise normalized summary for deduplication.
 
@@ -66,7 +71,7 @@ Issue title: {title}
 Issue body:
 {body[:1000]}
 
-Comments (up to 5):
+Comments (up to 20):
 {comments_text or "(none)"}
 
 Output a JSON object with these fields:
@@ -79,7 +84,7 @@ Output a JSON object with these fields:
 Output ONLY the JSON, no other text."""
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic(**client_kwargs)
         message = client.messages.create(
             model=SUMMARY_MODEL,
             max_tokens=300,

@@ -259,10 +259,16 @@ async def _haiku_judge_duplicate(
     """
     import anthropic
     import os
+    from .embeddings import SUMMARY_MODEL
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
         return "unknown"
+
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    client_kwargs = {"api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
 
     prompt = f"""Determine if these two issues describe the same bug or problem.
 
@@ -285,9 +291,9 @@ Respond with exactly one word: "duplicate", "related", or "unrelated"
 - unrelated: different problems"""
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
+        client = anthropic.Anthropic(**client_kwargs)
         message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=SUMMARY_MODEL,
             max_tokens=10,
             messages=[{"role": "user", "content": prompt}],
         )
