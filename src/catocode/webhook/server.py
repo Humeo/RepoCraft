@@ -12,7 +12,8 @@ from fastapi.responses import JSONResponse
 
 from ..auth import Auth, get_auth
 from ..config import get_github_app_webhook_secret, parse_repo_url, repo_id_from_url
-from ..dashboard import dashboard_html_route, make_router as make_dashboard_router
+from ..dashboard import dashboard_html_route
+from ..dashboard import make_router as make_dashboard_router
 from ..decision import decide_engagement
 from ..store import Store
 from .parser import parse_webhook
@@ -193,7 +194,6 @@ class WebhookServer:
 
     async def _handle_approval(self, event: Any, payload: dict[str, Any]) -> None:
         """Handle approval comment by transitioning pending_approval activity to pending."""
-        from ..config import parse_repo_url
         from ..decision import check_user_is_admin
 
         trigger_parts = event.trigger.split(":")
@@ -489,7 +489,7 @@ class WebhookServer:
 
     async def _handle_installation_repositories_event(self, payload: dict, delivery_id: str) -> dict:
         """Handle repos being added/removed from an existing GitHub App installation."""
-        action = payload.get("action")
+        action = payload.get("action")  # noqa: F841
         added = payload.get("repositories_added", [])
         removed = payload.get("repositories_removed", [])
 

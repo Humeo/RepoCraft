@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -9,6 +11,7 @@ from ..auth import Auth, get_auth
 from ..config import get_frontend_url
 from ..store import Store
 from . import deps as _deps
+from .billing_webhook import make_billing_webhook_router
 from .oauth import router as oauth_router
 from .routes import make_router as make_api_router
 
@@ -35,9 +38,13 @@ def create_app(store: Store, auth: Auth | None = None) -> FastAPI:
     _deps.set_store(store)
 
     frontend_url = get_frontend_url()
+    is_production = os.environ.get("CATOCODE_BASE_URL", "").startswith("https")
+    allowed_origins = [frontend_url]
+    if not is_production:
+        allowed_origins += ["http://localhost:3000", "http://localhost:3001"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[frontend_url, "http://localhost:3000", "http://localhost:3001"],
+        allow_origins=allowed_origins,
         allow_credentials=True,  # required for cookie-based sessions
         allow_methods=["*"],
         allow_headers=["*"],

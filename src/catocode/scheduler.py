@@ -18,7 +18,7 @@ import signal
 from datetime import datetime, timezone
 
 from .auth import Auth, get_auth
-from .config import get_anthropic_api_key, get_anthropic_base_url, get_patrol_config, parse_repo_url
+from .config import get_anthropic_api_key, get_anthropic_base_url, parse_repo_url
 from .container.manager import ContainerManager
 from .container.registry import ContainerRegistry
 from .decision import check_user_is_admin
@@ -148,7 +148,7 @@ class Scheduler:
         if len(parts) < 2:
             return
 
-        issue_or_pr_type = parts[0]  # "issue" or "pr"
+        issue_or_pr_type = parts[0]  # "issue" or "pr"  # noqa: F841
         number = parts[1]
 
         # Fetch recent comments

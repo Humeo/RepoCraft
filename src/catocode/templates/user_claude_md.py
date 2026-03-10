@@ -59,9 +59,9 @@ Always include a Before/After evidence section in PR descriptions:
 <details>
 <summary>Test output showing failure</summary>
 
-\`\`\`
+\\`\\`\\`
 [paste exact test/error output here]
-\`\`\`
+\\`\\`\\`
 
 </details>
 
@@ -69,9 +69,9 @@ Always include a Before/After evidence section in PR descriptions:
 <details>
 <summary>Test output showing fix</summary>
 
-\`\`\`
+\\`\\`\\`
 [paste exact test/error output here]
-\`\`\`
+\\`\\`\\`
 
 </details>
 
@@ -98,9 +98,9 @@ When filing issues from patrol scans:
 <details>
 <summary>Reproduction output</summary>
 
-\`\`\`
+\\`\\`\\`
 [paste exact output proving the bug exists]
-\`\`\`
+\\`\\`\\`
 
 </details>
 

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from .db import Connection, connect
-
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -103,6 +103,13 @@ CREATE TABLE IF NOT EXISTS installations (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS install_states (
+    state TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS issue_embeddings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     repo_id TEXT NOT NULL,
@@ -171,13 +178,19 @@ class Store:
         self._migrate()
 
     def _migrate(self) -> None:
-        """Apply schema migrations idempotently (ignore errors for existing columns)."""
+        """Apply schema migrations idempotently."""
+        _logger = logging.getLogger(__name__)
         for migration in _MIGRATIONS:
             try:
                 self._db.execute(migration)
                 self._db.commit()
-            except Exception:
-                pass  # Column already exists
+            except Exception as e:
+                err_lower = str(e).lower()
+                # Ignore expected idempotency errors (column/table already exists)
+                if any(k in err_lower for k in ("duplicate column", "already exists", "duplicate key")):
+                    pass
+                else:
+                    _logger.warning("Migration skipped with unexpected error: %s | SQL: %.120s", e, migration)
 
     # --- repos ---
 
@@ -638,6 +651,31 @@ class Store:
         self._db.execute("UPDATE oauth_states SET used = 1 WHERE state = ?", (state,))
         self._db.commit()
         return True
+
+    # --- install CSRF states ---
+
+    def create_install_state(self, state: str, user_id: str) -> None:
+        """Store a CSRF nonce that maps to a user_id for the GitHub App install flow."""
+        self._db.execute(
+            "INSERT INTO install_states (state, user_id, created_at, used) VALUES (?, ?, ?, 0)",
+            (state, user_id, _now()),
+        )
+        self._db.commit()
+
+    def consume_install_state(self, state: str) -> str | None:
+        """Validate and consume an install CSRF nonce. Returns user_id if valid, else None."""
+        from datetime import timedelta
+        row = self._db.execute_one(
+            "SELECT * FROM install_states WHERE state = ? AND used = 0", (state,)
+        )
+        if row is None:
+            return None
+        created = datetime.fromisoformat(row["created_at"])
+        if datetime.now(timezone.utc) - created > timedelta(minutes=10):
+            return None
+        self._db.execute("UPDATE install_states SET used = 1 WHERE state = ?", (state,))
+        self._db.commit()
+        return row["user_id"]
 
     # --- patrol reviewed files ---
 

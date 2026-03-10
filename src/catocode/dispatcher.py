@@ -5,10 +5,9 @@ import json
 import logging
 from typing import TYPE_CHECKING
 
-from .config import parse_repo_url, repo_id_from_url
+from .config import parse_repo_url
 from .github.commenter import failure_comment, post_issue_comment
 from .github.issue_fetcher import fetch_issue
-from .templates.init_prompt import get_init_prompt
 from .skill_renderer import (
     build_analyze_issue_prompt,
     build_fix_issue_prompt,
@@ -17,6 +16,7 @@ from .skill_renderer import (
     build_review_pr_prompt,
     build_triage_prompt,
 )
+from .templates.init_prompt import get_init_prompt
 
 if TYPE_CHECKING:
     from .container.manager import ContainerManager
@@ -290,8 +290,8 @@ Labels: {', '.join(issue.labels) if issue.labels else 'None'}
 {issue.body}
 """
         # RAG: find potential duplicates
-        from .issue_indexer import find_duplicates
         from .embeddings import is_embedding_service_configured
+        from .issue_indexer import find_duplicates
         relevant_issues: list[dict] = []
         if store is not None and is_embedding_service_configured():
             try:
@@ -333,8 +333,8 @@ Labels: {', '.join(issue.labels) if issue.labels else 'None'}
                 pass
 
         # RAG: query relevant issues if embedding service configured
-        from .issue_indexer import find_duplicates
         from .embeddings import is_embedding_service_configured
+        from .issue_indexer import find_duplicates
 
         relevant_issues: list[dict] = []
         if store is not None and is_embedding_service_configured() and changed_files:

@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any
+import secrets
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
 from ..store import Store
@@ -21,9 +21,9 @@ router = APIRouter(tags=["api"])
 
 class PatrolSettings(BaseModel):
     patrol_enabled: bool
-    patrol_interval_hours: int = 12
-    patrol_max_issues: int = 5
-    patrol_window_hours: int = 12
+    patrol_interval_hours: int = Field(default=12, gt=0, le=168)
+    patrol_max_issues: int = Field(default=5, gt=0, le=50)
+    patrol_window_hours: int = Field(default=12, gt=0, le=168)
 
 
 def _get_store_from_app(router_instance: APIRouter) -> Store:
@@ -118,9 +118,12 @@ def make_router(store: Store) -> APIRouter:
         if repo is None or repo.get("user_id") != current_user["id"]:
             raise HTTPException(status_code=403, detail="Access denied")
 
+        _SSE_TIMEOUT_SECONDS = 30 * 60  # 30 minutes max
+
         async def event_generator():
             last_id = 0
-            while True:
+            elapsed = 0
+            while elapsed < _SSE_TIMEOUT_SECONDS:
                 new_logs = store.get_logs_after(activity_id, last_id)
                 for log in new_logs:
                     last_id = log["id"]
@@ -136,6 +139,9 @@ def make_router(store: Store) -> APIRouter:
                     return
 
                 await asyncio.sleep(1)
+                elapsed += 1
+
+            yield {"event": "status", "data": json.dumps({"status": "timeout"})}
 
         return EventSourceResponse(event_generator())
 
@@ -154,10 +160,10 @@ def make_router(store: Store) -> APIRouter:
     async def get_install_url(current_user: CurrentUser) -> dict:
         from ..config import get_github_app_name
         app_name = get_github_app_name()
-        url = (
-            f"https://github.com/apps/{app_name}/installations/new"
-            f"?state={current_user['id']}"
-        )
+        # Generate a random CSRF nonce that maps to the current user
+        state = secrets.token_hex(32)
+        store.create_install_state(state, current_user["id"])
+        url = f"https://github.com/apps/{app_name}/installations/new?state={state}"
         return {"url": url}
 
     # --- Patrol endpoints ---

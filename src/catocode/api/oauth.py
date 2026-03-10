@@ -10,12 +10,11 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from ..config import (
     get_base_url,
     get_frontend_url,
-    get_github_app_name,
     get_github_oauth_client_id,
     get_github_oauth_client_secret,
 )
@@ -154,12 +153,17 @@ async def github_install_callback(
     store = _get_store(request)
     frontend_url = get_frontend_url()
 
-    # state may carry user_id (set in /api/install-url)
+    # Validate the CSRF state token to retrieve the associated user_id
     if state:
-        user = store.get_user(state)
-        if user:
-            store.link_installation_to_user(installation_id, state)
-            logger.info("Linked installation %s to user %s", installation_id, state[:8])
+        user_id = store.consume_install_state(state)
+        if user_id:
+            store.link_installation_to_user(installation_id, user_id)
+            logger.info("Linked installation %s to user %s", installation_id, user_id[:8])
+        else:
+            logger.warning(
+                "install-callback: invalid or expired state token (installation_id=%s)",
+                installation_id,
+            )
 
     return RedirectResponse(url=f"{frontend_url}/dashboard")
 

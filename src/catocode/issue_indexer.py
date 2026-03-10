@@ -299,8 +299,10 @@ async def _haiku_judge_duplicate(
 
     Returns: 'duplicate' | 'related' | 'unrelated'
     """
-    import anthropic
     import os
+
+    import anthropic
+
     from .embeddings import SUMMARY_MODEL
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")

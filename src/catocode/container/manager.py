@@ -13,8 +13,8 @@ import docker
 import docker.errors
 import docker.models.containers
 
+from ..config import get_git_user_email, get_git_user_name
 from .image_builder import _collect_proxy_buildargs, _rewrite_proxy_for_docker
-from ..config import get_git_user_name, get_git_user_email
 
 logger = logging.getLogger(__name__)
 

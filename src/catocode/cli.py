@@ -4,15 +4,13 @@ import argparse
 import asyncio
 import logging
 import sys
-import time
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
 
 from .auth import get_auth
 from .config import (
@@ -202,8 +200,9 @@ async def cmd_daemon(args: argparse.Namespace) -> int:
     tasks = [asyncio.create_task(scheduler.run())]
 
     if webhook_port:
-        import uvicorn
         import os
+
+        import uvicorn
 
         # Use unified SaaS app when OAuth credentials are configured
         oauth_client_id = os.environ.get("GITHUB_OAUTH_CLIENT_ID")

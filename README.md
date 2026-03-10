@@ -4,7 +4,7 @@
 
 > Named after Cato the Elder, the Roman statesman renowned for his unwavering integrity. CatoCode never compromises—every bug fix comes with proof, every claim backed by evidence.
 
-[![CI](https://github.com/yourusername/catocode/actions/workflows/ci.yml/badge.svg)](https://github.com/yourusername/catocode/actions/workflows/ci.yml)
+[![CI](https://github.com/Humeo/cato-code/actions/workflows/ci.yml/badge.svg)](https://github.com/Humeo/cato-code/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-required-blue)](https://www.docker.com/)

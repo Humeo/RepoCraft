@@ -117,7 +117,7 @@ def parse_webhook(
     # Pull request review events
     elif event_name == "pull_request_review":
         pr_number = payload.get("pull_request", {}).get("number")
-        review = payload.get("review", {})
+        review = payload.get("review", {})  # noqa: F841
 
         if not pr_number:
             return None
