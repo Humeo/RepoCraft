@@ -23,3 +23,29 @@ output/
 
 # OS
 .DS_Store
+
+*certificate*
+
+# SSH keys
+.keys/
+
+# GitHub App private keys
+*.pem
+*.key
+!public.key
+
+# Sensitive files
+*.private-key.*
+
+# Images / screenshots
+*.png
+*.jpg
+*.jpeg
+assets/
+
+# Frontend generated files
+frontend/next-env.d.ts
+frontend/tsconfig.tsbuildinfo
+
+# Playwright MCP
+.playwright-mcp/
