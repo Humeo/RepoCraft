@@ -38,8 +38,9 @@ cd frontend && bun install && bun dev
 ## Repository Layout
 
 Two branches, two repos:
-- **`main`** → `github.com/Humeo/cato-code` (open source, Apache 2.0, no SaaS limits)
-- **`dev`** → `github.com/Humeo/cato-code-saas` (private, adds usage quota, billing, GCP deploy)
+
+- **`main`** → `github.com/humeo/cato-code` (open source, Apache 2.0, no SaaS limits)
+- **`dev`** → `github.com/humeo/cato-code-saas` (private, adds usage quota, billing, GCP deploy)
 
 `dev` merges from `main`; never the reverse.
 
@@ -82,21 +83,25 @@ CatoCode is an **autonomous GitHub code maintenance agent** with two operating m
 ## Key Modules
 
 ### Orchestration
+
 - `cli.py` — Entry point. Subcommands: `server`, `watch`, `unwatch`, `daemon`, `fix`, `status`, `logs`
 - `scheduler.py` — Three async loops: approval check (30s), patrol scan (per-repo interval), dispatch (5s). In `_dispatch_one()`, per-user quota is checked before container resolution (SaaS mode only); exceeded activities are immediately marked `failed`
 - `dispatcher.py` — Activity execution pipeline; activity status reflects quota block or container errors
 - `skill_renderer.py` — Reads `SKILL.md` templates, strips YAML frontmatter, substitutes `{variable}` placeholders
 
 ### Data Layer
+
 - `db.py` — Dual-backend abstraction: SQLite (`?` placeholders, WAL mode, thread lock) and PostgreSQL (`%s` placeholders, psycopg2). `connect(url)` factory returns normalized `Connection`
 - `store.py` — All data operations. Schema defined in `SCHEMA` string; additive changes go in `_MIGRATIONS` list (idempotent — only "already exists" errors are silenced; unexpected errors are logged as warnings). Key tables: `users`, `sessions`, `oauth_states`, `install_states`, `repos`, `activities`, `logs`, `patrol_budget`, `issue_embeddings`
 
 ### Authentication (`auth/`)
+
 - Factory pattern in `__init__.py`: prefers GitHub App (`GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY`), falls back to `GITHUB_TOKEN`
 - `github_app.py` — Signs JWT, exchanges for 1-hour installation tokens, auto-refreshes before expiry
 - `crypto.py` — Fernet encryption for stored GitHub access tokens; key derived via PBKDF2-SHA256 from `SESSION_SECRET_KEY` (not pad/truncate)
 
 ### API Layer (`api/`) — SaaS Mode
+
 - `app.py` — FastAPI factory. CORS: only `FRONTEND_URL` in production (https); adds localhost in dev
 - `oauth.py` — GitHub OAuth 2.0 login flow + session cookies (30-day, httpOnly). `install-callback` validates a CSRF state token from `install_states` table (not the raw user_id)
 - `routes.py` — Protected endpoints behind `CurrentUser` session dependency. SSE log stream has 30-minute timeout. `/api/install-url` generates a random CSRF state stored in `install_states`
@@ -104,14 +109,17 @@ CatoCode is an **autonomous GitHub code maintenance agent** with two operating m
 - `billing_webhook.py` — Receives normalized payment provider webhooks, upgrades/downgrades `subscription_tier` on the user record
 
 ### Webhook System (`webhook/`)
+
 - `server.py` — Two endpoints: per-repo (`/webhook/github/{repo_id}`, optional secret) and app-level (`/webhook/app`, enforces `GITHUB_APP_WEBHOOK_SECRET`). Deduplication via delivery ID. Quota check before creating activities
 - `parser.py` — Normalizes GitHub events into `WebhookEvent` with trigger format (`issue:123`, `pr:456`)
 - `verifier.py` — HMAC-SHA256 signature verification
 
 ### Decision Engine (`decision/`)
+
 - `engine.py` — Maps events to skill kinds: issue opened → `analyze_issue`, PR opened → `review_pr`, approval comment → `fix_issue`, @mention → `task`. Skips CatoCode's own PRs
 
 ### Container Management (`container/`)
+
 - `manager.py` — Docker lifecycle: build image, create/start container, exec commands. Container named `catocode-worker-{user_id[:8]}` in SaaS mode
 - `registry.py` — `ContainerRegistry`: lazy dict of `user_id → ContainerManager`
 - `scripts/run_activity.py` — Executed inside container; runs Claude Agent SDK with prompt file
@@ -120,14 +128,14 @@ CatoCode is an **autonomous GitHub code maintenance agent** with two operating m
 
 Markdown prompt templates in `src/catocode/container/skills/`:
 
-| Skill | Trigger | Purpose |
-|-------|---------|---------|
-| `analyze_issue` | `issue:N` | Analyze issue, suggest solutions, post comment, wait for `/approve` |
-| `fix_issue` | `issue:N` | Execute approved fix with Proof of Work evidence |
-| `review_pr` | `pr:N` | Review PR code quality, security, tests |
-| `respond_review` | `pr:N` | Address PR review feedback (session resume) |
-| `triage` | `issue:N` | Classify and label issues |
-| `patrol` | `budget:N` | Proactive codebase scan for bugs/security |
+| Skill            | Trigger    | Purpose                                                             |
+| ---------------- | ---------- | ------------------------------------------------------------------- |
+| `analyze_issue`  | `issue:N`  | Analyze issue, suggest solutions, post comment, wait for `/approve` |
+| `fix_issue`      | `issue:N`  | Execute approved fix with Proof of Work evidence                    |
+| `review_pr`      | `pr:N`     | Review PR code quality, security, tests                             |
+| `respond_review` | `pr:N`     | Address PR review feedback (session resume)                         |
+| `triage`         | `issue:N`  | Classify and label issues                                           |
+| `patrol`         | `budget:N` | Proactive codebase scan for bugs/security                           |
 
 Each skill has `SKILL.md` (template with `{variable}` placeholders) and `README.md`.
 
@@ -152,6 +160,7 @@ Next.js 15 + React 19 + TypeScript + Tailwind CSS in `frontend/`. Uses `bun` for
 Key pages: landing (`/`), GitHub App install (`/install`), dashboard (`/dashboard`), pricing (`/pricing`).
 
 Frontend env vars (prefix `NEXT_PUBLIC_` for browser exposure):
+
 - `NEXT_PUBLIC_API_URL` — backend base URL
 - `NEXT_PUBLIC_GITHUB_APP_NAME` — used to build the GitHub App install link
 - `NEXT_PUBLIC_BILLING_CHECKOUT_URL` — payment provider checkout (optional)
@@ -189,6 +198,7 @@ BILLING_WEBHOOK_SECRET=...             # HMAC secret for payment provider webhoo
 ## SaaS vs CLI Mode Detection
 
 Auto-detected at startup in `cli.py`:
+
 - **SaaS mode**: `GITHUB_OAUTH_CLIENT_ID` + `SESSION_SECRET_KEY` set → unified FastAPI app
 - **CLI mode**: Otherwise → webhook-only server
 
