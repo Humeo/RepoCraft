@@ -245,6 +245,7 @@ class ContainerManager:
                 container.id,
                 cmd=["bash", "-lc", command],
                 workdir=workdir,
+                user="catocode",
             )
             for chunk in container.client.api.exec_start(exec_id["Id"], stream=True):
                 line = chunk.decode(errors="replace")

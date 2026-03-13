@@ -4,23 +4,10 @@
 
 > Named after Cato the Elder, the Roman statesman renowned for his unwavering integrity. CatoCode never compromises—every bug fix comes with proof, every claim backed by evidence.
 
-[![CI](https://github.com/Humeo/cato-code/actions/workflows/ci.yml/badge.svg)](https://github.com/Humeo/cato-code/actions/workflows/ci.yml)
+[![CI](https://github.com/humeo/cato-code/actions/workflows/ci.yml/badge.svg)](https://github.com/humeo/cato-code/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-required-blue)](https://www.docker.com/)
-
----
-
-## 🚀 Quick Start (Self-Hosted)
-
-```bash
-git clone https://github.com/yourusername/catocode.git
-cd catocode
-cp .env.example .env   # Fill in your API keys
-docker compose up -d
-```
-
-That's it. CatoCode is now watching your repos and will fix issues autonomously.
 
 ---
 
@@ -35,84 +22,135 @@ CatoCode is an **autonomous agent** that monitors your GitHub repositories and:
 
 Every action includes **Proof of Work**: before/after evidence so you can verify results in 30 seconds without manual testing.
 
----
-
-## 🔧 Proof of Work
-
-Every PR CatoCode creates includes an evidence table:
-
 ```markdown
-| Check            | Before        | After         |
-|------------------|---------------|---------------|
-| Failing test     | ❌ FAIL       | ✅ PASS       |
-| Full test suite  | 41 passed, 1 failed | 42 passed |
-| Related tests    | Broken        | Working       |
+| Check            | Before               | After       |
+|------------------|----------------------|-------------|
+| Failing test     | ❌ FAIL              | ✅ PASS     |
+| Full test suite  | 41 passed, 1 failed  | 42 passed   |
 ```
 
-No trust required — just look at the proof.
-
 ---
 
-## 📦 Self-Hosted Setup
+## 🚀 Quick Start (CLI Mode — Open Source)
 
-### Prerequisites
+The simplest way to run CatoCode: point it at a GitHub repo, start the daemon, and it will handle issues automatically.
 
-- Docker + Docker Compose
-- GitHub account (personal or organization)
+### 1. Prerequisites
+
+- Python 3.12+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or Docker Engine)
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) — Python package manager
 - Anthropic API key — [get one here](https://console.anthropic.com/)
+- GitHub Personal Access Token with `repo` + `issues` + `pull_requests` scopes
 
-### Configuration
-
-Copy `.env.example` and fill in your credentials:
+### 2. Install
 
 ```bash
-cp .env.example .env
+git clone https://github.com/humeo/cato-code.git
+cd cato-code
+uv sync
 ```
+
+### 3. Configure
+
+Create a `.env` file in the project root:
 
 ```bash
 # Required
 ANTHROPIC_API_KEY=sk-ant-...
+GITHUB_TOKEN=ghp_...          # Personal Access Token
 
-# Choose one auth method:
-# Option A — Personal Access Token (simplest)
-GITHUB_TOKEN=ghp_...
-
-# Option B — GitHub App (recommended for organizations)
-GITHUB_APP_ID=...
-GITHUB_APP_PRIVATE_KEY=...           # RSA private key (newlines as \n)
-GITHUB_APP_INSTALLATION_ID=...
-GITHUB_OAUTH_CLIENT_ID=...
-GITHUB_OAUTH_CLIENT_SECRET=...
-SESSION_SECRET_KEY=...               # 32+ random bytes (openssl rand -hex 32)
-CATOCODE_BASE_URL=http://localhost:8000
-FRONTEND_URL=http://localhost:3000
+# Optional
+GIT_USER_NAME=CatoCode
+GIT_USER_EMAIL=catocode@bot.local
+CATOCODE_PATROL_MAX_ISSUES=5
+CATOCODE_PATROL_WINDOW_HOURS=12
 ```
 
-### Start
+### 4. Watch a Repository
 
 ```bash
-docker compose up -d
+uv run catocode watch https://github.com/owner/repo
 ```
 
-Dashboard available at `http://localhost:3000` (GitHub App mode) or use the CLI directly.
+This registers the repo in the local database (`~/.catocode/catocode.db`).
 
-### CLI Mode
+### 5. Start the Daemon
 
 ```bash
-# Install
-uv sync
+uv run catocode daemon --webhook-port 8080
+```
 
-# Watch a repo
+The daemon runs three background loops:
+- **Dispatch** (every 5s) — picks up pending activities and runs them in Docker
+- **Approval check** (every 30s) — detects `/approve` comments and triggers fixes
+- **Patrol** (configurable) — proactively scans repos for bugs
+
+### 6. Expose Webhooks (Required for Real-Time Events)
+
+For CatoCode to react to new issues and PRs in real time, GitHub needs to reach the daemon's webhook endpoint. Use [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/get-started/create-local-tunnel/) for a free public URL:
+
+```bash
+# Install cloudflared
+brew install cloudflare/cloudflare/cloudflared   # macOS
+
+# Create a temporary public tunnel
+cloudflared tunnel --url http://localhost:8080
+# Output: https://your-tunnel-id.trycloudflare.com
+```
+
+Then add a webhook in your GitHub repo:
+- **URL**: `https://your-tunnel-id.trycloudflare.com/webhook/github/{owner-repo}`
+  - Replace `{owner-repo}` with e.g. `alice-myproject` (owner and repo joined by `-`)
+- **Content type**: `application/json`
+- **Events**: Issues, Issue comments, Pull requests, Pull request reviews
+
+### 7. (Optional) Run the Dashboard
+
+A read-only Next.js dashboard lets you view watched repos, activity history, and logs.
+
+```bash
+cd frontend
+bun install
+bun dev
+# Open http://localhost:3000
+```
+
+> **Note**: In CLI mode, the dashboard is read-only — no GitHub login required. Authentication is only needed in GitHub App / SaaS mode.
+
+---
+
+## 🔄 How It Works
+
+1. **New issue opened** on GitHub → webhook fires to CatoCode
+2. **Daemon receives** the event → `analyze_issue` activity created
+3. **Docker worker container** spins up (built automatically on first run)
+4. **Claude Agent** (via [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)) analyzes the issue, posts a comment with analysis + proposed solutions
+5. **You reply** `/approve` on the GitHub issue
+6. **CatoCode** creates a PR with the fix + Proof of Work evidence
+
+---
+
+## 📋 CLI Reference
+
+```bash
+# Watch a repo (registers in local DB)
 uv run catocode watch https://github.com/owner/repo
 
-# Start the daemon
-uv run catocode daemon
+# Stop watching a repo
+uv run catocode unwatch https://github.com/owner/repo
 
-# Fix a specific issue right now
+# Start the daemon (webhook server + scheduler)
+uv run catocode daemon --webhook-port 8080
+
+# Fix a specific issue immediately (no webhook needed)
 uv run catocode fix https://github.com/owner/repo/issues/42
 
-# Check status
+# Show watched repos and recent activity
 uv run catocode status
+
+# Tail recent logs
+uv run catocode logs
 ```
 
 ---
@@ -121,20 +159,21 @@ uv run catocode status
 
 ```
 ┌─ Host Process ──────────────────────────────────────┐
-│  CLI / FastAPI Server                                │
+│  CLI Daemon                                          │
 │  ├── Scheduler (approval check, patrol, dispatch)   │
-│  ├── Webhook Server (per-repo + app-level)          │
-│  ├── OAuth + REST API (GitHub App mode)             │
-│  └── Store (SQLite or PostgreSQL)                   │
+│  ├── Webhook Server (/webhook/github/{repo_id})      │
+│  └── Store (SQLite at ~/.catocode/catocode.db)       │
 └──────────────────┬──────────────────────────────────┘
                    │ Docker API
-┌─ Per-User Container ────────────────────────────────┐
+┌─ Worker Container ──────────────────────────────────┐
 │  catocode-worker                                    │
-│  ├── Claude Agent SDK                               │
+│  ├── Claude Agent SDK + Claude Code CLI             │
 │  ├── Dev tools (git, gh, python, node, uv)          │
 │  └── /repos/{owner-repo}/ (cloned repos)            │
 └─────────────────────────────────────────────────────┘
 ```
+
+The Docker image is built automatically on first run (~5–10 minutes). Subsequent starts reuse the cached image.
 
 ### Skills
 
@@ -153,11 +192,67 @@ Skills live in `src/catocode/container/skills/` and can be customized without co
 
 ---
 
+## ⚙️ Full Configuration Reference
+
+```bash
+# Anthropic
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_BASE_URL=...              # Optional: custom API endpoint
+
+# GitHub Auth — choose one:
+GITHUB_TOKEN=ghp_...               # CLI mode: Personal Access Token
+
+# Git identity (used for commits inside the container)
+GIT_USER_NAME=CatoCode
+GIT_USER_EMAIL=catocode@bot.local
+
+# Webhook server
+WEBHOOK_PORT=8080
+
+# Patrol limits
+CATOCODE_PATROL_MAX_ISSUES=5       # Max issues to patrol per window
+CATOCODE_PATROL_WINDOW_HOURS=12    # Rolling window for patrol
+
+# Container resources
+CATOCODE_MEM=8g                    # Memory limit for worker container
+CATOCODE_CPUS=4                    # CPU limit
+
+# Database (default: SQLite)
+DATABASE_URL=postgresql://...       # Optional: use PostgreSQL instead
+```
+
+---
+
+## 🐳 Docker Compose (Alternative)
+
+For a fully containerized setup:
+
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+docker compose up -d
+```
+
+Dashboard at `http://localhost:3000`, webhook server at `http://localhost:8080`.
+
+---
+
+## 🔐 GitHub App Mode (Advanced)
+
+For teams and organizations, GitHub App mode offers:
+- Automatic installation across all repos in an org
+- OAuth dashboard with per-user activity tracking
+- No need to manually configure webhooks per repo
+
+See [docs/GITHUB_APP_SETUP.md](docs/GITHUB_APP_SETUP.md) for setup instructions.
+
+---
+
 ## 🧪 Development
 
 ```bash
-# Install dependencies
-uv sync
+# Install dependencies (including dev tools)
+uv sync --dev
 
 # Run all tests
 uv run pytest
@@ -168,8 +263,9 @@ uv run pytest --cov=src/catocode
 # Run integration tests (requires Docker)
 uv run pytest -m integration
 
-# Start the server (GitHub App mode)
-uv run catocode server --port 8000
+# Lint
+uv run ruff check src/
+uv run ruff check src/ --fix
 
 # Frontend
 cd frontend && bun install && bun dev
@@ -188,20 +284,12 @@ cd frontend && bun install && bun dev
 
 ---
 
-## 📚 Documentation
-
-- [Skill Architecture](docs/SKILL_ARCHITECTURE.md) — How the skill system works
-- [Skill Implementation](docs/SKILL_IMPLEMENTATION_SUMMARY.md) — Technical details
-- [Skills Reference](src/catocode/container/skills/) — All available skills
-
----
-
 ## 🔒 Security
 
 - Your code never leaves your infrastructure (except the Anthropic API)
-- GitHub tokens stored locally, encrypted at rest in GitHub App mode
-- CatoCode runs in an isolated Docker container
-- All commits signed as `CatoCode <catocode@catocode.dev>`
+- GitHub token stored locally in `.env` — never committed
+- CatoCode runs in an isolated Docker container with limited permissions
+- All commits are attributed to the configured `GIT_USER_NAME` / `GIT_USER_EMAIL`
 
 ---
 
@@ -216,6 +304,6 @@ Apache License 2.0 — see [LICENSE](LICENSE) for details.
 **"Integrity is doing the right thing, even when no one is watching."**
 — Cato the Elder
 
-[Get Started](#-quick-start-self-hosted) • [Documentation](docs/) • [Contributing](#-contributing)
+[Get Started](#-quick-start-cli-mode--open-source) • [CLI Reference](#-cli-reference) • [Contributing](#-contributing)
 
 </div>

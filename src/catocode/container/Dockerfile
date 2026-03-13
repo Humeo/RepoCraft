@@ -24,7 +24,7 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:$PATH"
 
 # Layer 4: Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code
+RUN npm install -g @anthropic-ai/claude-code@latest
 
 # Layer 5: Claude Agent SDK (installed system-wide)
 RUN pip3 install --break-system-packages claude-agent-sdk

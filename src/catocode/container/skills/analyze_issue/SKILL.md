@@ -51,11 +51,17 @@ Only continue to the analysis steps below if no duplicate was found.
      - Confidence (low/medium/high)
    - For each solution, explain the approach and trade-offs
 
-4. **Post your analysis as a comment:**
-   - Use clear, structured formatting
+4. **Post your analysis as a GitHub comment using the `gh` CLI:**
+
+   ```bash
+   gh issue comment {{issue_number}} --body "YOUR_ANALYSIS_HERE"
+   ```
+
+   The comment must:
+   - Use clear, structured markdown formatting
    - Include reproduction steps if you found them
    - Explain your recommended solution
-   - Add this footer:
+   - End with this exact footer:
 
    ```
    ---
@@ -64,6 +70,8 @@ Only continue to the analysis steps below if no duplicate was found.
 
    *This analysis was performed by CatoCode, an autonomous maintenance agent.*
    ```
+
+   **IMPORTANT: You MUST run the `gh issue comment` command above. Do not just output the analysis as text — it must be posted to GitHub.**
 
 ## Important Guidelines
 
