@@ -54,3 +54,13 @@ frontend/tsconfig.tsbuildinfo
 # Claude Code and agent skills (local dev tools)
 .claude/
 .agents/
+
+# Playwright CLI session files
+.playwright-cli/
+.playwright-profile/
+
+# Codex skills (local dev tools)
+.codex/
+
+# Misplaced home directory
+~/
