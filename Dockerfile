@@ -20,7 +20,8 @@ WORKDIR /app
 
 # Install Python deps (layer-cached)
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev \
+    && ln -s /app/.venv/bin/catocode /usr/local/bin/catocode
 
 # Copy source
 COPY src/ src/
