@@ -27,6 +27,10 @@ services:
       - CATOCODE_PATROL_WINDOW_HOURS=${CATOCODE_PATROL_WINDOW_HOURS:-12}
       - CATOCODE_MEM=${CATOCODE_MEM:-8g}
       - CATOCODE_CPUS=${CATOCODE_CPUS:-4}
+      # Embedding service (optional, for issue deduplication)
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-}
     command: server --port 8000 --max-concurrent ${MAX_CONCURRENT:-3}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/webhook/health"]
