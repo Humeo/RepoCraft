@@ -44,8 +44,6 @@ AI code completion tools (Copilot, Cursor) help you write code, but they're reac
 
 **CatoCode sits in the middle: always running, actively responding, but leaving evidence at every step. You decide what to merge.**
 
-> 你的代码库一直在产生 issue 和 bug——CatoCode 在你不在时帮你处理，但每一步都留证据，merge 权永远在你手里。
-
 ---
 
 ## Hosted Service
@@ -190,7 +188,7 @@ In GitHub repo **Settings → Webhooks**, add:
 
 **Proof of Work.** CatoCode doesn't accept "I fixed it." Every fix requires: failure evidence before + passing evidence after + full test suite with no regressions. The PR description contains a verifiable before/after table. You can decide in 30 seconds whether to merge.
 
-> 设计哲学遵循 [nanoclaw](https://github.com/qwibitai/nanoclaw) 的设计哲学。
+> Design philosophy follows [nanoclaw](https://github.com/qwibitai/nanoclaw).
 
 ---
 
