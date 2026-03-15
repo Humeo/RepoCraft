@@ -1,10 +1,8 @@
 <div align="center">
 
-<img src="frontend/public/logo.svg" width="80" height="80" alt="CatoCode" />
+<img src="readme-banner.png" width="1200" alt="CatoCode — 长时运行的代码库维护助手" />
 
-# CatoCode
 
-### 长时运行的代码库维护助手——自动处理 issue、修复 bug、审查 PR，7×24 不间断
 
 [![CI](https://github.com/humeo/cato-code/actions/workflows/ci.yml/badge.svg)](https://github.com/humeo/cato-code/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-blue)](https://www.python.org/)

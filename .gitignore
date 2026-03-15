@@ -43,6 +43,7 @@ output/
 *.jpg
 *.jpeg
 assets/
+!readme-banner.png
 
 # Frontend generated files
 frontend/next-env.d.ts
